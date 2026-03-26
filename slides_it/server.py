@@ -29,12 +29,12 @@ _OPENCODE_AUTH = pathlib.Path.home() / ".local" / "share" / "opencode" / "auth.j
 _NATIVE_PROVIDERS = {"anthropic", "openai", "opencode", "openrouter", "deepseek", ""}
 
 # Directories that are never shown in the workspace file tree.
-# .slides-it is intentionally NOT in this list — it belongs to slides-it and should be visible.
 _LS_IGNORE: set[str] = {
     ".git", ".vscode", ".venv", ".idea",
     "node_modules", "__pycache__", ".DS_Store",
     ".mypy_cache", ".pytest_cache", ".ruff_cache",
     ".tox", "dist", ".next", ".nuxt",
+    ".slides-it",   # internal slides-it state — not useful to the user
 }
 
 # ---------------------------------------------------------------------------
@@ -121,6 +121,7 @@ class TemplateEntry(BaseModel):
 
 class SessionRequest(BaseModel):
     session_id: str
+    messages: list[dict] = []   # serialised ChatMessage[] from the frontend
     description: str
     author: str
     version: str
@@ -286,35 +287,41 @@ async def shutdown() -> dict[str, str]:
 
 
 @app.get("/api/session")
-def get_session() -> dict[str, str | None]:
+def get_session() -> dict[str, object]:
     """
-    Return the persisted session ID for the current workspace, or null if none.
-    The session ID is stored in <workspace>/.slides-it/session.json.
+    Return the persisted session ID and message history for the current workspace.
+    Both are stored in <workspace>/.slides-it/history.json.
     """
     if not _workspace_dir:
-        return {"session_id": None}
-    session_file = pathlib.Path(_workspace_dir) / ".slides-it" / "session.json"
-    if not session_file.exists():
-        return {"session_id": None}
+        return {"session_id": None, "messages": []}
+    history_file = pathlib.Path(_workspace_dir) / ".slides-it" / "history.json"
+    if not history_file.exists():
+        return {"session_id": None, "messages": []}
     try:
-        data = json.loads(session_file.read_text())
-        return {"session_id": data.get("session_id")}
+        data = json.loads(history_file.read_text())
+        return {
+            "session_id": data.get("session_id"),
+            "messages": data.get("messages", []),
+        }
     except Exception:
-        return {"session_id": None}
+        return {"session_id": None, "messages": []}
 
 
 @app.put("/api/session")
 def save_session(req: SessionRequest) -> dict[str, str]:
     """
-    Persist the active session ID to <workspace>/.slides-it/session.json.
-    Called by the frontend immediately after creating or resuming a session.
+    Persist the active session ID and message history to
+    <workspace>/.slides-it/history.json.
+    Called by the frontend after each completed agent turn.
     """
     if not _workspace_dir:
         raise HTTPException(status_code=400, detail="No active workspace")
     slides_dir = pathlib.Path(_workspace_dir) / ".slides-it"
     slides_dir.mkdir(exist_ok=True)
-    session_file = slides_dir / "session.json"
-    session_file.write_text(json.dumps({"session_id": req.session_id}))
+    history_file = slides_dir / "history.json"
+    history_file.write_text(
+        json.dumps({"session_id": req.session_id, "messages": req.messages})
+    )
     return {"status": "saved"}
 
 

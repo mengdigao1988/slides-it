@@ -180,16 +180,16 @@ export function saveSettings(s: SettingsRequest): Promise<{ status: string }> {
   })
 }
 
-/** Return the persisted session ID for the current workspace, or null if none. */
-export function getSession(): Promise<{ session_id: string | null }> {
-  return request<{ session_id: string | null }>('/api/session')
+/** Return the persisted session ID and message history for the current workspace. */
+export function getSession(): Promise<{ session_id: string | null; messages: object[] }> {
+  return request<{ session_id: string | null; messages: object[] }>('/api/session')
 }
 
-/** Persist the active session ID to .slides-it/session.json in the workspace. */
-export function saveSession(sessionId: string): Promise<{ status: string }> {
+/** Persist the active session ID and message history to .slides-it/history.json. */
+export function saveSession(sessionId: string, messages: object[]): Promise<{ status: string }> {
   return request<{ status: string }>('/api/session', {
     method: 'PUT',
-    body: JSON.stringify({ session_id: sessionId }),
+    body: JSON.stringify({ session_id: sessionId, messages }),
   })
 }
 

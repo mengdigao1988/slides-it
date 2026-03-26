@@ -9,7 +9,6 @@ import {
 import {
   connectEventStream,
   createSession,
-  getMessages,
   sendPrompt,
   abortSession,
   replyQuestion,
@@ -18,7 +17,6 @@ import {
   isAttachableAsFile,
   findFiles,
   type FilePart,
-  type MessageWithParts,
 } from '../lib/opencode-api'
 import {
   enqueueDelta,
@@ -84,6 +82,9 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
   const msgMapRef = useRef<Map<string, string>>(new Map())
   const partMapRef = useRef<Map<string, string>>(new Map())
   const partTypeRef = useRef<Map<string, string>>(new Map())
+  // Refs that mirror state so SSE callbacks always read the latest values
+  const sessionIdRef = useRef<string | null>(null)
+  const messagesRef = useRef<ChatMessage[]>([])
   const pendingCharsRef = useRef<PendingMap>(new Map())
   const rafRef = useRef<number | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -102,6 +103,10 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
       setCurrentModel(res.current)
     }).catch(() => {})
   }, [])
+
+  // Keep refs in sync so SSE callbacks always read the latest values
+  useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
+  useEffect(() => { messagesRef.current = messages }, [messages])
 
   // Close model dropdown on outside click
   useEffect(() => {
@@ -196,37 +201,42 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
     let cancelled = false
 
     async function initSession() {
-      // Try to restore an existing session from .slides-it/session.json
-      let restoredId: string | null = null
+      // Try to restore message history saved in .slides-it/history.json.
+      // We always create a fresh OpenCode session (old ones don't survive
+      // a server restart), but we display the saved messages so the user
+      // can see their conversation history.
+      let savedMessages: ChatMessage[] = []
       try {
         const saved = await getSession()
-        if (saved.session_id) {
-          // Attempt to load history from OpenCode
-          const history = await getMessages(saved.session_id)
-          if (!cancelled && history && history.length > 0) {
-            const restored = reconstructMessages(history)
-            setMessages(restored)
-            restoredId = saved.session_id
-            setSessionId(restoredId)
+        if (saved.messages && saved.messages.length > 0) {
+          // Deserialise: timestamps come back as strings, convert to Date
+          savedMessages = (saved.messages as ChatMessage[]).map((m) => ({
+            ...m,
+            timestamp: new Date(m.timestamp),
+          }))
+        }
+      } catch {
+        // No history file or read error — start fresh
+      }
+
+      // Always create a fresh OpenCode session
+      try {
+        const s = await createSession('slides-it')
+        if (!cancelled) {
+          setSessionId(s.id)
+          sessionIdRef.current = s.id
+          // Populate UI with saved history (display only — not re-sent to agent)
+          if (savedMessages.length > 0) {
+            setMessages(savedMessages)
+            messagesRef.current = savedMessages
             // Restore the preview panel with the most recent HTML file
             detectHtmlFile()
           }
+          // Persist new session ID (keep saved messages intact)
+          saveSession(s.id, savedMessages).catch(() => {})
         }
-      } catch {
-        // Session expired or not found — fall through to create new
-      }
-
-      if (!cancelled && !restoredId) {
-        try {
-          const s = await createSession('slides-it')
-          if (!cancelled) {
-            setSessionId(s.id)
-            // Persist new session ID
-            saveSession(s.id).catch(() => {})
-          }
-        } catch (err) {
-          console.error(err)
-        }
+      } catch (err) {
+        console.error(err)
       }
     }
 
@@ -254,7 +264,14 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
       const status = (properties.status as { type: string })?.type
       if (status === 'idle') {
         flushPending()
-        setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m))
+        setMessages((prev) => {
+          const settled = prev.map((m) => m.streaming ? { ...m, streaming: false } : m)
+          // Persist history on every idle — use refs to avoid stale closure
+          if (sessionIdRef.current) {
+            saveSession(sessionIdRef.current, settled).catch(() => {})
+          }
+          return settled
+        })
         setSending(false)
         runningToolRef.current = ''
         setRunningTool('')
@@ -533,53 +550,6 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
     await rejectQuestion(requestId).catch(() => {})
   }
 
-  // ── Message reconstruction from OpenCode history ─────────────────────────
-  function reconstructMessages(history: MessageWithParts[]): ChatMessage[] {
-    const result: ChatMessage[] = []
-    for (const msg of history) {
-      const isUser = msg.info.role === 'user'
-      // Collect text parts and tool parts
-      let text = ''
-      let thinking: string | undefined
-      const tools: ToolEntry[] = []
-
-      for (const part of msg.parts) {
-        if (part.type === 'text' && part.text) {
-          text += part.text
-        } else if (part.type === 'reasoning' && part.text) {
-          thinking = (thinking ?? '') + part.text
-        } else if (part.type === 'tool' && part.tool) {
-          const toolState = (part as unknown as Record<string, unknown>).state as Record<string, unknown> | undefined
-          tools.push({
-            id: part.id,
-            name: part.tool,
-            tool: part.tool,
-            status: (part.status === 'completed' ? 'completed' : part.status === 'error' ? 'error' : 'completed') as 'running' | 'completed' | 'error',
-            title: toolState?.title as string | undefined,
-            input: toolState?.input as Record<string, unknown> | undefined,
-            output: toolState?.output as string | undefined,
-            error: toolState?.error as string | undefined,
-          })
-        }
-      }
-
-      // Skip empty messages
-      if (!text && !isUser && tools.length === 0 && !thinking) continue
-
-      result.push({
-        id: msg.info.id,
-        role: isUser ? 'user' : 'assistant',
-        text,
-        streaming: false,
-        error: msg.info.error ? msg.info.error.data?.message ?? 'Error' : null,
-        timestamp: new Date(),
-        tools,
-        thinking,
-      })
-    }
-    return result
-  }
-
   async function handleNewChat() {
     flushPending()
     if (rafRef.current) { clearTimeout(rafRef.current); rafRef.current = null }
@@ -594,7 +564,7 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
     const s = await createSession('slides-it').catch(() => null)
     if (s) {
       setSessionId(s.id)
-      saveSession(s.id).catch(() => {})
+      saveSession(s.id, []).catch(() => {})
     }
   }
 
