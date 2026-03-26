@@ -9,10 +9,16 @@ import {
 import {
   connectEventStream,
   createSession,
+  getMessages,
   sendPrompt,
   abortSession,
+  replyQuestion,
+  rejectQuestion,
   fileToFilePart,
+  isAttachableAsFile,
+  findFiles,
   type FilePart,
+  type MessageWithParts,
 } from '../lib/opencode-api'
 import {
   enqueueDelta,
@@ -21,10 +27,12 @@ import {
   type ChatMessage,
   type PendingMap,
   type ToolEntry,
+  type QuestionRequest,
 } from '../lib/typewriter'
-import { getModels, setModel } from '../lib/slides-server-api'
+import { getModels, setModel, listTemplates, getSession, saveSession } from '../lib/slides-server-api'
 import ThinkingDots from './ThinkingDots'
 import ToolBlock from './ToolBlock'
+import QuestionBlock from './QuestionBlock'
 import AtPopover from './AtPopover'
 
 const MarkdownRenderer = lazy(() => import('./MarkdownRenderer'))
@@ -33,7 +41,9 @@ type Mode = 'build' | 'plan'
 
 interface ChatPanelProps {
   workspacePath: string
+  activeSkill?: string
   activeTemplate?: string
+  onTemplateChange?: (name: string) => Promise<string>
   onHtmlGenerated: (path: string) => void
 }
 
@@ -42,7 +52,7 @@ interface AtReference {
   name: string
 }
 
-export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelProps) {
+export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, onTemplateChange, onHtmlGenerated }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [sending, setSending] = useState(false)
   const [input, setInput] = useState('')
@@ -64,6 +74,11 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
   const [modelOpen, setModelOpen] = useState(false)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
 
+  // Template pill
+  const [templateList, setTemplateList] = useState<string[]>([])
+  const [templateOpen, setTemplateOpen] = useState(false)
+  const templateDropdownRef = useRef<HTMLDivElement>(null)
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const msgMapRef = useRef<Map<string, string>>(new Map())
@@ -72,6 +87,13 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
   const pendingCharsRef = useRef<PendingMap>(new Map())
   const rafRef = useRef<number | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Track the name of the currently running tool for ThinkingDots label
+  const runningToolRef = useRef<string>('')
+  const [runningTool, setRunningTool] = useState('')
+  // Map question requestID → bubble ID (to attach question to the right bubble)
+  const questionBubbleRef = useRef<Map<string, string>>(new Map())
+  // Track answered question labels for read-only display
+  const questionAnswersRef = useRef<Map<string, string[][]>>(new Map())
 
   // ── Load models ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -92,10 +114,53 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
     return () => document.removeEventListener('mousedown', handleClick)
   }, [modelOpen])
 
+  // Load template list + close on outside click
+  useEffect(() => {
+    if (!templateOpen) return
+    listTemplates().then((list) => setTemplateList(list.map((t) => t.name))).catch(() => {})
+  }, [templateOpen])
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (templateDropdownRef.current && !templateDropdownRef.current.contains(e.target as Node)) {
+        setTemplateOpen(false)
+      }
+    }
+    if (templateOpen) document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [templateOpen])
+
   async function handleModelSelect(modelID: string) {
     setCurrentModel(modelID)
     setModelOpen(false)
     await setModel(modelID).catch(() => {})
+  }
+
+  async function handleTemplateSelect(name: string) {
+    setTemplateOpen(false)
+    if (name === activeTemplate) return
+    // Fetch new skill first, get it back directly (don't rely on React state update timing)
+    const newSkill = onTemplateChange ? await onTemplateChange(name) : (activeSkill || undefined)
+    // Auto-send a message so the agent actively acknowledges the new template
+    if (sessionId) {
+      const text = `I've switched to the "${name}" template. Please use this visual style for all future slide generation.`
+      setMessages((prev) => [...prev, {
+        id: `u-${Date.now()}`,
+        role: 'user',
+        text,
+        streaming: false,
+        error: null,
+        timestamp: new Date(),
+        tools: [],
+      }])
+      setSending(true)
+      try {
+        await sendPrompt(sessionId, text, currentModel || undefined, currentMode, undefined, newSkill || undefined)
+      } catch (e) {
+        setChatError((e as Error).message)
+        setSending(false)
+      }
+    }
   }
 
   // ── Typewriter ──────────────────────────────────────────────────────────
@@ -129,9 +194,43 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
   // ── Session init ─────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false
-    createSession('slides-it').then((s) => {
-      if (!cancelled) setSessionId(s.id)
-    }).catch(console.error)
+
+    async function initSession() {
+      // Try to restore an existing session from .slides-it/session.json
+      let restoredId: string | null = null
+      try {
+        const saved = await getSession()
+        if (saved.session_id) {
+          // Attempt to load history from OpenCode
+          const history = await getMessages(saved.session_id)
+          if (!cancelled && history && history.length > 0) {
+            const restored = reconstructMessages(history)
+            setMessages(restored)
+            restoredId = saved.session_id
+            setSessionId(restoredId)
+            // Restore the preview panel with the most recent HTML file
+            detectHtmlFile()
+          }
+        }
+      } catch {
+        // Session expired or not found — fall through to create new
+      }
+
+      if (!cancelled && !restoredId) {
+        try {
+          const s = await createSession('slides-it')
+          if (!cancelled) {
+            setSessionId(s.id)
+            // Persist new session ID
+            saveSession(s.id).catch(() => {})
+          }
+        } catch (err) {
+          console.error(err)
+        }
+      }
+    }
+
+    initSession()
 
     const es = connectEventStream()
     eventSourceRef.current = es
@@ -157,6 +256,8 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
         flushPending()
         setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m))
         setSending(false)
+        runningToolRef.current = ''
+        setRunningTool('')
         detectHtmlFile()
       }
     }
@@ -174,42 +275,83 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
           error: errMsg, timestamp: new Date(), tools: [],
         }]
       })
+      runningToolRef.current = ''
+      setRunningTool('')
       setSending(false)
     }
 
     if (type === 'message.updated') {
-      const am = properties as { id: string; role: string; error?: unknown }
-      if (am.role !== 'assistant') return
-      if (!msgMapRef.current.has(am.id)) {
-        const bid = `a-${am.id}`
-        msgMapRef.current.set(am.id, bid)
+      // Actual SSE structure: properties.info contains id, role, error
+      const info = (properties as { info: { id: string; role: string; error?: unknown } }).info
+      if (!info || info.role !== 'assistant') return
+      if (!msgMapRef.current.has(info.id)) {
+        const bid = `a-${info.id}`
+        msgMapRef.current.set(info.id, bid)
         setMessages((prev) => [...prev, {
           id: bid, role: 'assistant', text: '', streaming: true,
           error: null, timestamp: new Date(), tools: [],
         }])
       }
-      if (am.error) {
-        const errMsg = (am.error as { data?: { message?: string } })?.data?.message ?? 'Error'
-        const bid = msgMapRef.current.get(am.id)!
+      if (info.error) {
+        const errMsg = (info.error as { data?: { message?: string } })?.data?.message ?? 'Error'
+        const bid = msgMapRef.current.get(info.id)!
         setMessages((prev) => prev.map((m) =>
           m.id === bid ? { ...m, error: errMsg, streaming: false } : m
         ))
+        runningToolRef.current = ''
+        setRunningTool('')
         setSending(false)
       }
     }
 
     if (type === 'message.part.updated') {
-      const { partID, messageID, part } = properties as {
-        partID: string; messageID: string
-        part: { type: string; tool?: string; status?: string }
+      // Actual SSE structure: properties.part contains id, messageID, type, state, tool...
+      // partID and messageID are inside part, NOT at properties top-level
+      const { part } = properties as {
+        part: {
+          id: string
+          messageID: string
+          type: string
+          tool?: string
+          state?: {
+            status: string
+            input?: Record<string, unknown>
+            output?: string
+            title?: string
+            error?: string
+          }
+        }
       }
+      const partID = part.id
+      const messageID = part.messageID
+      const state = part.state
+      const status = state?.status ?? ''
       partTypeRef.current.set(partID, part.type)
       const bubbleId = msgMapRef.current.get(messageID)
       if (!bubbleId) return
+
       if (part.type === 'text') partMapRef.current.set(partID, bubbleId)
+
       if (part.type === 'tool') {
+        const toolName = part.tool ?? ''
+        // Track running tool for ThinkingDots
+        if (status === 'running') {
+          runningToolRef.current = toolName
+          setRunningTool(toolName)
+        } else if (runningToolRef.current === toolName && (status === 'completed' || status === 'error')) {
+          runningToolRef.current = ''
+          setRunningTool('')
+        }
+
         const toolEntry: ToolEntry = {
-          id: partID, name: part.tool ?? '', tool: part.tool ?? '', status: part.status ?? '',
+          id: partID,
+          name: toolName,
+          tool: toolName,
+          status,
+          title: state?.title,
+          input: state?.input,
+          output: state?.output,
+          error: state?.error,
         }
         setMessages((prev) => prev.map((m) => {
           if (m.id !== bubbleId) return m
@@ -225,8 +367,18 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
         partID: string; messageID: string; field: string; delta?: string
       }
       if (!delta) return
-      if (partTypeRef.current.get(partID) === 'reasoning') return
       if (field !== 'text') return
+
+      // Reasoning/thinking — accumulate into bubble's `thinking` field (don't typewrite)
+      if (partTypeRef.current.get(partID) === 'reasoning') {
+        const bid = msgMapRef.current.get(messageID)
+        if (bid) {
+          setMessages((prev) => prev.map((m) =>
+            m.id === bid ? { ...m, thinking: (m.thinking ?? '') + delta } : m
+          ))
+        }
+        return
+      }
 
       let bid = partMapRef.current.get(partID) ?? msgMapRef.current.get(messageID)
       if (!bid) {
@@ -242,14 +394,47 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
       enqueueDelta(pendingCharsRef.current, bid, delta)
       startTypewriter()
     }
+
+    // ── AskUserQuestion ────────────────────────────────────────────────────
+    if (type === 'question.asked') {
+      const req = properties as unknown as QuestionRequest
+      // Attach the question to the most recent assistant bubble
+      setMessages((prev) => {
+        const lastAssistant = [...prev].reverse().find((m) => m.role === 'assistant')
+        if (!lastAssistant) {
+          // No bubble yet — create one
+          const bid = `a-q-${req.id}`
+          questionBubbleRef.current.set(req.id, bid)
+          return [...prev, {
+            id: bid, role: 'assistant', text: '', streaming: true,
+            error: null, timestamp: new Date(), tools: [], question: req,
+          }]
+        }
+        questionBubbleRef.current.set(req.id, lastAssistant.id)
+        return prev.map((m) =>
+          m.id === lastAssistant.id ? { ...m, question: req } : m
+        )
+      })
+    }
+
+    if (type === 'question.replied') {
+      const { requestID } = properties as { requestID: string }
+      // Clear the question from the bubble (it will show answered summary instead)
+      const bid = questionBubbleRef.current.get(requestID)
+      if (bid) {
+        setMessages((prev) => prev.map((m) =>
+          m.id === bid ? { ...m, question: undefined } : m
+        ))
+      }
+    }
   }
 
   function detectHtmlFile() {
     if (!workspacePath) return
-    fetch('http://localhost:4096/file/status')
-      .then((r) => r.json())
-      .then((files: Array<{ path: string }>) => {
-        const html = files.filter((f) => f.path.endsWith('.html'))
+    findFiles('.html', 20)
+      .then((files) => {
+        const html = files
+          .filter((f) => f.path.endsWith('.html'))
           .sort((a, b) => b.path.localeCompare(a.path))[0]
         if (html) onHtmlGenerated(html.path)
       })
@@ -263,14 +448,33 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
     setInput('')
     resize()
 
-    // Build file parts from @ references
+    // Build file parts from @ references.
+    // Only images and PDFs are sent as binary FileParts (Claude supports these natively).
+    // Text/code/html files are referenced by path in the message text — the agent
+    // reads them with its own tools. Sending them as FileParts causes
+    // "media type: text/html functionality not supported" errors from Anthropic.
     let fileParts: FilePart[] | undefined
+    let textWithRefs = text
     if (atReferences.length > 0) {
-      try {
-        fileParts = await Promise.all(atReferences.map((r) => fileToFilePart(r.path)))
-      } catch {
-        // If file read fails, send without file parts
+      const binaryRefs = atReferences.filter((r) => isAttachableAsFile(r.name))
+      const textRefs = atReferences.filter((r) => !isAttachableAsFile(r.name))
+
+      // Binary files → FilePart
+      if (binaryRefs.length > 0) {
+        try {
+          fileParts = await Promise.all(binaryRefs.map((r) => fileToFilePart(r.path)))
+        } catch {
+          // If file read fails, fall back to path reference
+          textRefs.push(...binaryRefs)
+        }
       }
+
+      // Text files → append paths to message text so agent can read them
+      if (textRefs.length > 0) {
+        const pathList = textRefs.map((r) => r.path).join('\n')
+        textWithRefs = text + '\n\n' + pathList
+      }
+
       setAtReferences([])
     }
 
@@ -285,7 +489,7 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
     setSending(true)
 
     try {
-      await sendPrompt(sessionId, text, currentModel || undefined, currentMode, fileParts)
+      await sendPrompt(sessionId, textWithRefs, currentModel || undefined, currentMode, fileParts, activeSkill || undefined)
     } catch (e) {
       setChatError((e as Error).message)
       setSending(false)
@@ -298,19 +502,100 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
     flushPending()
     if (rafRef.current) { clearTimeout(rafRef.current); rafRef.current = null }
     setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m))
+    runningToolRef.current = ''
+    setRunningTool('')
     setSending(false)
+  }
+
+  async function handleQuestionReply(requestId: string, answers: string[][]) {
+    // Store answers for read-only display
+    questionAnswersRef.current.set(requestId, answers)
+    // Show answered summary in bubble immediately (optimistic)
+    const bid = questionBubbleRef.current.get(requestId)
+    if (bid) {
+      setMessages((prev) => prev.map((m) =>
+        m.id === bid
+          ? { ...m, question: undefined, questionAnswered: { requestId, answers, questions: m.question?.questions ?? [] } }
+          : m
+      ))
+    }
+    await replyQuestion(requestId, answers).catch(() => {})
+  }
+
+  async function handleQuestionReject(requestId: string) {
+    // Clear question from bubble
+    const bid = questionBubbleRef.current.get(requestId)
+    if (bid) {
+      setMessages((prev) => prev.map((m) =>
+        m.id === bid ? { ...m, question: undefined } : m
+      ))
+    }
+    await rejectQuestion(requestId).catch(() => {})
+  }
+
+  // ── Message reconstruction from OpenCode history ─────────────────────────
+  function reconstructMessages(history: MessageWithParts[]): ChatMessage[] {
+    const result: ChatMessage[] = []
+    for (const msg of history) {
+      const isUser = msg.info.role === 'user'
+      // Collect text parts and tool parts
+      let text = ''
+      let thinking: string | undefined
+      const tools: ToolEntry[] = []
+
+      for (const part of msg.parts) {
+        if (part.type === 'text' && part.text) {
+          text += part.text
+        } else if (part.type === 'reasoning' && part.text) {
+          thinking = (thinking ?? '') + part.text
+        } else if (part.type === 'tool' && part.tool) {
+          const toolState = (part as unknown as Record<string, unknown>).state as Record<string, unknown> | undefined
+          tools.push({
+            id: part.id,
+            name: part.tool,
+            tool: part.tool,
+            status: (part.status === 'completed' ? 'completed' : part.status === 'error' ? 'error' : 'completed') as 'running' | 'completed' | 'error',
+            title: toolState?.title as string | undefined,
+            input: toolState?.input as Record<string, unknown> | undefined,
+            output: toolState?.output as string | undefined,
+            error: toolState?.error as string | undefined,
+          })
+        }
+      }
+
+      // Skip empty messages
+      if (!text && !isUser && tools.length === 0 && !thinking) continue
+
+      result.push({
+        id: msg.info.id,
+        role: isUser ? 'user' : 'assistant',
+        text,
+        streaming: false,
+        error: msg.info.error ? msg.info.error.data?.message ?? 'Error' : null,
+        timestamp: new Date(),
+        tools,
+        thinking,
+      })
+    }
+    return result
   }
 
   async function handleNewChat() {
     flushPending()
     if (rafRef.current) { clearTimeout(rafRef.current); rafRef.current = null }
     msgMapRef.current.clear(); partMapRef.current.clear(); partTypeRef.current.clear()
+    questionBubbleRef.current.clear(); questionAnswersRef.current.clear()
     setMessages([])
     setSending(false)
+    runningToolRef.current = ''
+    setRunningTool('')
     setAtReferences([])
     setAtQuery(null)
     const s = await createSession('slides-it').catch(() => null)
-    if (s) setSessionId(s.id)
+    if (s) {
+      setSessionId(s.id)
+      saveSession(s.id).catch(() => {})
+    }
   }
 
   useEffect(() => {
@@ -511,6 +796,68 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
     </div>
   )
 
+  // ── Template pill ─────────────────────────────────────────────────────────
+  const templatePill = onTemplateChange ? (
+    <div className="relative" ref={templateDropdownRef}>
+      <button
+        onClick={() => setTemplateOpen((o) => !o)}
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] transition-colors"
+        style={{
+          color: 'var(--text-muted)',
+          border: '1px solid var(--border)',
+          background: 'var(--bg-surface)',
+          fontFamily: 'inherit',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
+        title="Switch template"
+      >
+        <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: 'var(--text-muted)' }} />
+        <span className="truncate max-w-[100px]">{activeTemplate ?? 'default'}</span>
+        <svg
+          className="w-2.5 h-2.5 flex-shrink-0 transition-transform"
+          style={{ transform: templateOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {templateOpen && (
+        <div
+          className="absolute bottom-full mb-1 left-0 z-50 rounded-xl py-1 overflow-y-auto"
+          style={{
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border)',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
+            minWidth: '160px',
+            maxHeight: '200px',
+          }}
+        >
+          {(templateList.length > 0 ? templateList : [activeTemplate ?? 'default']).map((t) => (
+            <button
+              key={t}
+              onClick={() => handleTemplateSelect(t)}
+              className="w-full text-left px-3 py-1.5 text-[11px] transition-colors flex items-center gap-2"
+              style={{
+                color: t === activeTemplate ? 'var(--text-primary)' : 'var(--text-secondary)',
+                fontWeight: t === activeTemplate ? 500 : 400,
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              {t === activeTemplate
+                ? <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: 'var(--green-dot)' }} />
+                : <span className="w-1.5 h-1.5 flex-shrink-0" />
+              }
+              <span className="truncate">{t}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  ) : null
+
   // ── Model pill ───────────────────────────────────────────────────────────
   const modelPill = (
     <div className="relative" ref={modelDropdownRef}>
@@ -586,11 +933,11 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
           <div className="mb-6 select-none">
             <span
               style={{
-                fontFamily: "'Press Start 2P', monospace",
-                fontSize: '0.8rem',
+                fontFamily: "'Söhne', ui-sans-serif, -apple-system, sans-serif",
+                fontSize: '1.75rem',
+                fontWeight: 600,
                 color: 'var(--text-primary)',
-                letterSpacing: '0.04em',
-                textShadow: '2px 2px 0 var(--border)',
+                letterSpacing: '-0.02em',
                 lineHeight: 1,
               }}
             >
@@ -599,7 +946,8 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
           </div>
           <div style={{ width: '100%', maxWidth: '560px' }}>
             {inputBox}
-            <div className="mt-2 flex justify-start">
+            <div className="mt-2 flex justify-start gap-2">
+              {templatePill}
               {modelPill}
             </div>
           </div>
@@ -608,10 +956,9 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
         // ── Chat mode ────────────────────────────────────────────────────
         <>
           <div
-            className="px-5 py-2 flex items-center justify-between flex-shrink-0"
+            className="px-5 py-2 flex items-center justify-end flex-shrink-0"
             style={{ borderBottom: '1px solid var(--border)' }}
           >
-            {modelPill}
             <button
               onClick={handleNewChat}
               className="text-xs transition-colors"
@@ -625,7 +972,13 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
 
           <div className="flex-1 overflow-y-auto px-4 py-5 space-y-1">
             {messages.map((msg) => (
-              <MessageBubble key={msg.id} msg={msg} />
+              <MessageBubble
+                key={msg.id}
+                msg={msg}
+                runningTool={runningTool}
+                onQuestionReply={handleQuestionReply}
+                onQuestionReject={handleQuestionReject}
+              />
             ))}
             <div ref={messagesEndRef} />
           </div>
@@ -645,6 +998,10 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
 
           <div className="flex-shrink-0 px-4 pb-4 pt-2">
             {inputBox}
+            <div className="mt-2 flex justify-start gap-2">
+              {templatePill}
+              {modelPill}
+            </div>
           </div>
         </>
       )}
@@ -653,9 +1010,20 @@ export default function ChatPanel({ workspacePath, onHtmlGenerated }: ChatPanelP
 }
 
 // ── MessageBubble ──────────────────────────────────────────────────────────
-function MessageBubble({ msg }: { msg: ChatMessage }) {
+function MessageBubble({
+  msg,
+  runningTool,
+  onQuestionReply,
+  onQuestionReject,
+}: {
+  msg: ChatMessage
+  runningTool: string
+  onQuestionReply: (requestId: string, answers: string[][]) => void
+  onQuestionReject: (requestId: string) => void
+}) {
   const isUser = msg.role === 'user'
   const attachments = (msg as ChatMessage & { attachmentNames?: string[] }).attachmentNames
+  const [thinkingOpen, setThinkingOpen] = useState(false)
 
   return (
     <div
@@ -695,14 +1063,72 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
         </div>
       )}
 
+      {/* Thinking/reasoning block (folded by default) */}
+      {msg.thinking && (
+        <div className="mb-2">
+          <button
+            onClick={() => setThinkingOpen((o) => !o)}
+            className="flex items-center gap-1.5 text-[11px] transition-colors mb-1"
+            style={{ color: 'var(--text-muted)', fontFamily: 'inherit' }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-muted)')}
+          >
+            <svg
+              className="w-2.5 h-2.5 flex-shrink-0 transition-transform"
+              style={{ transform: thinkingOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            Thinking…
+          </button>
+          {thinkingOpen && (
+            <div
+              className="text-[11px] leading-relaxed px-3 py-2 rounded-lg overflow-y-auto"
+              style={{
+                background: 'var(--bg-sidebar)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-muted)',
+                maxHeight: '200px',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {msg.thinking}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Tool blocks */}
       {msg.tools.map((t) => <ToolBlock key={t.id} tool={t} />)}
+
+      {/* Pending question (interactive) */}
+      {msg.question && (
+        <QuestionBlock
+          question={msg.question}
+          onReply={onQuestionReply}
+          onReject={onQuestionReject}
+        />
+      )}
+
+      {/* Answered question (read-only summary) */}
+      {msg.questionAnswered && (
+        <QuestionBlock
+          question={{ id: msg.questionAnswered.requestId, sessionID: '', questions: msg.questionAnswered.questions }}
+          onReply={() => {}}
+          onReject={() => {}}
+          answered
+          answeredLabels={msg.questionAnswered.answers}
+        />
+      )}
 
       {/* Body */}
       {msg.error ? (
         <p className="text-sm" style={{ color: 'var(--error)' }}>{msg.error}</p>
+      ) : msg.streaming && msg.text === '' && msg.tools.length === 0 && !msg.question ? (
+        <ThinkingDots toolName={runningTool} />
       ) : msg.streaming && msg.text === '' ? (
-        <ThinkingDots />
+        null
       ) : msg.streaming ? (
         <p className="text-sm whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text-primary)' }}>
           {msg.text}

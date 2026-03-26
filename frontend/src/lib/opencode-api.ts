@@ -107,6 +107,7 @@ export function sendPrompt(
   modelID?: string,
   agent?: 'build' | 'plan',
   fileParts?: FilePart[],
+  system?: string,
 ): Promise<void> {
   const parts: object[] = [{ type: 'text', text }]
   if (fileParts) {
@@ -120,12 +121,31 @@ export function sendPrompt(
       parts,
       ...(modelID ? { modelID } : {}),
       ...(agent ? { agent } : {}),
+      ...(system ? { system } : {}),
     }),
   })
 }
 
 export function abortSession(sessionId: string): Promise<void> {
   return request<void>(`/session/${sessionId}/abort`, { method: 'POST' })
+}
+
+/**
+ * Reply to an AskUserQuestion tool call.
+ * answers: one string[] per question, each containing the selected label(s).
+ */
+export function replyQuestion(requestId: string, answers: string[][]): Promise<void> {
+  return request<void>(`/question/${encodeURIComponent(requestId)}/reply`, {
+    method: 'POST',
+    body: JSON.stringify({ answers }),
+  })
+}
+
+/** Reject (skip) a pending question request. */
+export function rejectQuestion(requestId: string): Promise<void> {
+  return request<void>(`/question/${encodeURIComponent(requestId)}/reject`, {
+    method: 'POST',
+  })
 }
 
 export function listFiles(path: string): Promise<FileNode[]> {
@@ -186,7 +206,25 @@ export function guessMime(filename: string): string {
 }
 
 /**
- * Read a file via opencode and return a FilePart ready for sendPrompt.
+ * Determine if a file should be sent as a binary FilePart (image/PDF)
+ * or referenced by path in the message text.
+ *
+ * Claude (Anthropic) only supports file attachments for:
+ *   - Images: png, jpg, jpeg, gif, webp, svg
+ *   - Documents: pdf
+ * All other file types (code, html, text, etc.) must be referenced by path
+ * so the agent can read them with its own tools.
+ */
+const BINARY_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf'])
+
+export function isAttachableAsFile(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
+  return BINARY_EXTS.has(ext)
+}
+
+/**
+ * Read a binary file (image/PDF) via opencode and return a FilePart.
+ * Only call this for files where isAttachableAsFile() returns true.
  */
 export async function fileToFilePart(path: string): Promise<FilePart> {
   const name = path.split('/').pop() ?? path

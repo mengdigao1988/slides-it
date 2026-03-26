@@ -1,85 +1,153 @@
 # slides-it
 
-**Describe your presentation. Get a beautiful HTML slide deck. No design skills required.**
-
-> Work in progress — actively being updated.
+**Stop making slides. Start making points.**
 
 ![slides-it](img/image.png)
 
 ---
 
-## The idea
+You open a slide tool. You pick a template. You spend 45 minutes nudging text boxes, fighting with fonts, and arguing with alignment guides. You end up with something that looks almost — but not quite — like what you had in your head.
 
-Presentation tools have always been GUI-first: click a template, drag a text box, fight with alignment, pick fonts, nudge spacing. It's tedious — even for people who do it every day.
+There's a better way.
 
-HTML has always been a better format for slides. Smooth animations, pixel-perfect layout, runs in any browser, no software required. But nobody wants to write HTML by hand. So people use PowerPoint instead.
+**Type what you want. Get a beautiful slide deck. Done.**
 
-**slides-it removes that barrier entirely.**
-
-You describe what you want in plain language. The AI handles all the design — layout, typography, animations, color palette, content structure. You never touch HTML, CSS, or JavaScript. The result is a single self-contained `.html` file: beautiful, keyboard-navigable, and shareable with anyone.
-
-The interaction model for presentations has changed. The GUI is no longer the interface — your words are.
-
-### HTML is the native format for the agent era
-
-There's a deeper reason why HTML is the right output format here — one that goes beyond "it looks good in a browser."
-
-An AI agent doesn't see the world the way a human does. It doesn't click through menus or drag elements around a canvas. What it does exceptionally well is read and write structured text. HTML is structured text. A complete slide deck — every layout decision, every animation, every color — can be expressed as a single file that an agent can write from scratch, revise precisely, and reason about in full. There are no hidden state layers, no binary formats, no GUI intermediaries between the agent's intent and the output.
-
-PowerPoint and Keynote were designed for humans operating GUIs. Their file formats reflect that: opaque, proprietary, built around the assumption that a person is dragging things around. Asking an AI to work with them is fighting the format. HTML, by contrast, is transparent all the way down. The agent reads your instruction, writes the file, and the result is immediately inspectable, runnable, and shareable — no export step, no conversion, no application required to open it.
-
-This is why slides-it doesn't wrap an existing presentation tool. It skips the GUI entirely and goes straight to the output format that agents are naturally good at producing.
-
-slides-it is powered by [OpenCode](https://opencode.ai) — an open-source AI coding agent that runs locally and drives everything under the hood.
+slides-it turns a plain-language description into a complete, self-contained HTML presentation — stunning animations, perfect typography, keyboard navigation, works in any browser. No design skills. No templates to fight. No software to install on the other end.
 
 ---
 
-## How to use
+## What it looks like
 
-**1. Install OpenCode**
+> "8 slides on our Q1 roadmap. Audience is the whole company. Punchy, confident tone."
 
-slides-it requires [OpenCode](https://opencode.ai) to run. Install it first:
+Thirty seconds later: a polished deck lands in your workspace. Arrow keys to navigate. Swipe on mobile. Share it as a single `.html` file — no slide tool required, no account needed, no export dance.
+
+Want changes?
+
+> "Make the opening slide more dramatic. Add a slide on pricing. Lighter color scheme."
+
+Done. The whole deck is regenerated with your changes applied. You never touched HTML.
+
+---
+
+## Why HTML
+
+HTML has always been the superior format for slides. Fluid animations. Pixel-perfect layout. Runs everywhere. No proprietary app required. Nobody used it because nobody wanted to write it by hand.
+
+AI changes that equation completely.
+
+An AI agent doesn't struggle with HTML — it's fluent in it. Every layout decision, every animation curve, every color relationship can be expressed as text, written in one shot, revised with surgical precision. Compare that to the opaque binary formats that GUI slide tools produce, built for humans dragging boxes around a canvas. Asking an AI to work with them is fighting the format.
+
+slides-it skips the GUI entirely. Your words go in. A beautiful file comes out.
+
+Powered by [OpenCode](https://opencode.ai) — an open-source AI coding agent that runs locally and handles everything under the hood.
+
+---
+
+## Features
+
+### Templates that actually mean something
+
+Most "templates" are just color schemes slapped on the same layout. slides-it templates are different — each one is a complete visual brief that tells the AI exactly how to design: which fonts carry authority, how much whitespace breathes, what animation style fits the mood, how color creates hierarchy.
+
+Switch templates mid-conversation with one click. The AI is immediately re-briefed and applies the new aesthetic to everything going forward.
+
+Ships with two:
+
+| Template | Vibe |
+|----------|------|
+| `default` | Dark, modern, cinematic. Works for anything. |
+| `minimal` | Warm off-white, typographic, paper-like. Lets the content breathe. |
+
+Install more from the registry, from any URL, or build your own:
+
+```bash
+slides-it template install dark-neon          # official registry
+slides-it template install github:user/repo   # any GitHub repo
+slides-it template install ./my-template      # local directory
+```
+
+### Memory across sessions
+
+Your conversation lives in `.slides-it/session.json` inside your workspace. Close the app, come back tomorrow, reopen the same folder — your full chat history is right where you left it, and the last preview reloads automatically. No starting over.
+
+### Built-in workspace browser
+
+Navigate your project files directly in the sidebar. Click any `.html` file to preview it instantly — no context-switching, no separate browser tab.
+
+### Live preview panel
+
+Every generated deck opens immediately in the right-hand panel. It's fully interactive: keyboard navigation, swipe, progress bar. When you ask for changes, the preview updates the moment the file is rewritten. Download with one click.
+
+---
+
+## Install
+
+**Requires [OpenCode](https://opencode.ai):**
 
 ```bash
 curl -fsSL https://opencode.ai/install | sh
 ```
 
-Then set your Anthropic API key:
+**Then install slides-it:**
 
 ```bash
-export ANTHROPIC_API_KEY=your_key_here
+curl -fsSL https://raw.githubusercontent.com/slides-it/slides-it/main/install.sh | bash
 ```
 
-**2. Install slides-it**
-
-```bash
-curl -fsSL https://slides-it.dev/install.sh | sh
-```
-
-**3. Run**
+**Run:**
 
 ```bash
 slides-it
 ```
 
-This opens the slides-it UI in your browser.
+A browser window opens. Pick a workspace folder. Start talking.
 
-**4. Describe your presentation**
+Set your Anthropic API key in the ⚙ settings panel — or pass it in your environment:
 
-Type what you want in the chat panel. For example:
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+slides-it
+```
 
-> "A 8-slide deck about our Q1 product roadmap, for an all-hands meeting, in English. Keep it punchy."
+---
 
-The AI will ask a few quick questions if needed (audience, slide count, language), then generate the complete slide deck.
+## CLI
 
-**5. Get your file**
+```
+slides-it                          launch the web UI
+slides-it --version                show version
+slides-it stop                     stop everything
 
-A self-contained `.html` file is written to your working directory. Open it in any browser — navigate with arrow keys or swipe.
+slides-it template list            list installed templates
+slides-it template search          search the official registry
+slides-it template install <src>   install a template
+slides-it template remove <name>   remove a template
+slides-it template activate <name> set the active template
+```
 
-**6. Iterate in plain language**
+---
 
-Want changes? Just say so:
+## Development
 
-> "Make the title slide bolder. Add a slide about pricing. Switch to a lighter color scheme."
+Requires [uv](https://docs.astral.sh/uv/) and Node.js 22+.
 
-The AI regenerates the whole deck with your changes applied. No manual editing required.
+```bash
+# Backend — FastAPI on port 3000
+uv run python -c "from slides_it.server import run; run(port=3000)"
+
+# Frontend — dev server on port 5173
+cd frontend && npm install && npm run dev
+
+# Production build
+cd frontend && npm run build
+
+# Standalone binary
+bash build.sh
+```
+
+---
+
+## License
+
+MIT

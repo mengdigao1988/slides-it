@@ -37,19 +37,20 @@ to Phase 2.
 Once you have enough information, generate the complete HTML file in one shot.
 
 - Output **only** the raw HTML — no markdown fences, no explanation before or after
-- Write the file to the current working directory as `<topic-slug>.html`
-  (e.g. "AI Future" → `ai-future.html`)
+- Create a `slides/` directory in the current working directory if it doesn't already exist
+- Write the file to `slides/<topic-slug>.html`
+  (e.g. "AI Future" → `slides/ai-future.html`)
 - The file must be completely self-contained (all CSS and JS inline)
 
 ### Phase 3 — Iterate
 
 After generating, briefly tell the user:
-- The filename you wrote
+- The filename you wrote (e.g. `slides/ai-future.html`)
 - How to navigate (arrow keys / swipe)
 - One line invitation to request changes
 
 For change requests: re-generate the **entire** file (don't patch). Apply the
-change and silently overwrite the same filename.
+change and silently overwrite the same `slides/<topic-slug>.html` filename.
 
 ---
 
@@ -164,11 +165,11 @@ hotzone.addEventListener('mouseleave', () => {
 
 | Topic | Filename |
 |-------|----------|
-| "AI in Healthcare" | `ai-in-healthcare.html` |
-| "Q3 Sales Review" | `q3-sales-review.html` |
-| "Intro to Python" | `intro-to-python.html` |
+| "AI in Healthcare" | `slides/ai-in-healthcare.html` |
+| "Q3 Sales Review" | `slides/q3-sales-review.html` |
+| "Intro to Python" | `slides/intro-to-python.html` |
 
-Lowercase, hyphens, no spaces, `.html` extension.
+Lowercase, hyphens, no spaces, `.html` extension. Always place files inside the `slides/` subdirectory.
 
 ---
 

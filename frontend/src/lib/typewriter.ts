@@ -42,12 +42,44 @@ export interface ChatMessage {
   error: string | null
   timestamp: Date
   tools: ToolEntry[]
-  attachmentNames?: string[]  // @ referenced file names, shown as badges
+  thinking?: string             // accumulated reasoning/thinking text (folded by default)
+  question?: QuestionRequest    // pending AskUserQuestion — cleared after reply
+  questionAnswered?: {          // answered question summary for read-only display
+    requestId: string
+    answers: string[][]
+    questions: QuestionInfo[]
+  }
+  attachmentNames?: string[]    // @ referenced file names, shown as badges
 }
 
 export interface ToolEntry {
   id: string
   name: string
   tool: string
-  status: string
+  status: string              // pending | running | completed | error
+  title?: string              // human-readable title from opencode
+  input?: Record<string, unknown>   // raw input object from ToolState
+  output?: string             // result text (completed state)
+  error?: string              // error message (error state)
+}
+
+// ── AskUserQuestion types (mirrors opencode QuestionRequest schema) ──────────
+
+export interface QuestionOption {
+  label: string
+  description: string
+}
+
+export interface QuestionInfo {
+  question: string
+  header: string
+  options: QuestionOption[]
+  multiple?: boolean   // allow selecting multiple options
+  custom?: boolean     // allow typing a custom answer (default: true)
+}
+
+export interface QuestionRequest {
+  id: string           // "que_..." — used to reply/reject
+  sessionID: string
+  questions: QuestionInfo[]
 }

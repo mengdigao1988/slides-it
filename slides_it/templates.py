@@ -19,8 +19,6 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 # Built-in templates bundled with the package
 _BUILTIN_DIR = pathlib.Path(__file__).parent / "templates"
 
-OPENCODE_AGENTS_MD = pathlib.Path.home() / ".config" / "opencode" / "AGENTS.md"
-_SLIDES_IT_MARKER = "<!-- slides-it managed -->"
 DEFAULT_TEMPLATE = "default"
 
 
@@ -196,76 +194,22 @@ class TemplateManager:
             raise ValueError(f"Template '{template_name}' has no SKILL.md")
         return skill_file.read_text(encoding="utf-8")
 
-    def write_rules(self, template_name: str | None = None) -> None:
+    def build_prompt(self, template_name: str | None = None) -> str:
         """
-        Write the combined system prompt to ~/.config/opencode/AGENTS.md.
-
-        Concatenates core SKILL.md + active template SKILL.md and writes to
-        OpenCode's global rules file. If a prior file exists (not written by
-        slides-it), its contents are preserved and appended after the slides-it
-        block so nothing is lost.
-
-        Call this on startup and whenever the active template changes.
+        Concatenate core SKILL.md + template SKILL.md into a combined system prompt.
 
         Args:
             template_name: Template to use. Defaults to the active template.
-        """
-        content = self._build_prompt(template_name)
-        OPENCODE_AGENTS_MD.parent.mkdir(parents=True, exist_ok=True)
-
-        prior = ""
-        if OPENCODE_AGENTS_MD.exists():
-            existing = OPENCODE_AGENTS_MD.read_text(encoding="utf-8")
-            # If we already own it, replace it entirely
-            if _SLIDES_IT_MARKER in existing:
-                OPENCODE_AGENTS_MD.write_text(content, encoding="utf-8")
-                return
-            # Otherwise, preserve the original content after our block
-            prior = existing
-
-        combined = content + ("\n\n" + prior if prior else "")
-        OPENCODE_AGENTS_MD.write_text(combined, encoding="utf-8")
-
-    def cleanup_rules(self) -> None:
-        """
-        Remove the slides-it block from ~/.config/opencode/AGENTS.md on exit.
-
-        If the file contains content beyond the slides-it block, it is restored.
-        If slides-it wrote the entire file, it is deleted.
-        """
-        if not OPENCODE_AGENTS_MD.exists():
-            return
-        existing = OPENCODE_AGENTS_MD.read_text(encoding="utf-8")
-        if _SLIDES_IT_MARKER not in existing:
-            return  # Not our file, leave it alone
-
-        # Split off any preserved original content that followed our block
-        parts = existing.split(_SLIDES_IT_MARKER, maxsplit=2)
-        # parts[0] = everything before marker (our header comment)
-        # Find trailing user content after the closing marker line
-        tail = ""
-        if len(parts) > 2:
-            # second marker closes our block; content after is user's
-            tail = parts[2].strip()
-
-        if tail:
-            OPENCODE_AGENTS_MD.write_text(tail, encoding="utf-8")
-        else:
-            OPENCODE_AGENTS_MD.unlink(missing_ok=True)
-
-    def _build_prompt(self, template_name: str | None = None) -> str:
-        """
-        Concatenate core SKILL.md + template SKILL.md with the managed marker.
 
         Returns:
-            Full string to write to ~/.config/opencode/AGENTS.md.
+            Full system prompt string ready to pass as the `system` field in
+            POST /session/:id/prompt_async.
         """
         core_skill = (
             pathlib.Path(__file__).parent / "skill" / "SKILL.md"
         ).read_text(encoding="utf-8")
         template_skill = self.get_skill_md(template_name)
-        body = f"{core_skill}\n\n---\n\n{template_skill}"
-        return f"{_SLIDES_IT_MARKER}\n{body}\n{_SLIDES_IT_MARKER}"
+        return f"{core_skill}\n\n---\n\n{template_skill}"
 
     # ------------------------------------------------------------------
     # Private helpers

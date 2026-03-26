@@ -8,82 +8,32 @@ import sys
 import time
 import threading
 import webbrowser
+from importlib.metadata import version as _pkg_version
 
 import typer
-from typing_extensions import Annotated
+from typing import Annotated
 
 from slides_it.templates import TemplateManager
 
-app = typer.Typer(
-    name="slides-it",
-    help="AI-powered HTML presentation generator.",
-    no_args_is_help=False,
-    invoke_without_command=True,
-)
-
-template_app = typer.Typer(help="Manage presentation templates.")
-app.add_typer(template_app, name="template")
-
-_REGISTRY_URL = "https://raw.githubusercontent.com/slides-it/slides-it/main/registry.json"
-_SERVER_PORT = 3000
-_FRONTEND_DIST = pathlib.Path(__file__).parent.parent / "frontend" / "dist"
-
-
 # ---------------------------------------------------------------------------
-# Main entry point — `slides-it` with no subcommand launches the app
+# Helpers
 # ---------------------------------------------------------------------------
 
-@app.callback(invoke_without_command=True)
-def _launch(ctx: typer.Context) -> None:
-    """Launch the slides-it web UI."""
-    if ctx.invoked_subcommand is not None:
-        return
+def _resource_path(relative: str) -> pathlib.Path:
+    """
+    Return the correct absolute path to a bundled resource.
 
-    # Check opencode is installed
-    if not shutil.which("opencode"):
-        typer.echo("Error: opencode is not installed.", err=True)
-        typer.echo("Install it with: curl -fsSL https://opencode.ai/install | bash", err=True)
-        raise typer.Exit(1)
+    When running from source: resolves relative to the repo root
+    (two levels up from this file: slides_it/cli.py → slides_it/ → repo/).
 
-    # Free the port if a previous slides-it left it occupied
-    _free_port(_SERVER_PORT)
-
-    from slides_it.server import mount_frontend, run as run_server
-
-    # Mount built frontend if it exists
-    if _FRONTEND_DIST.exists():
-        mount_frontend(_FRONTEND_DIST)
+    When running as a PyInstaller --onefile binary: resolves relative to
+    sys._MEIPASS (the temporary extraction directory).
+    """
+    if getattr(sys, "frozen", False):
+        base = pathlib.Path(sys._MEIPASS)  # type: ignore[attr-defined]
     else:
-        typer.echo(
-            "Warning: frontend/dist not found. Run `cd frontend && npm run build` first.",
-            err=True,
-        )
-
-    typer.echo(f"Starting slides-it at http://localhost:{_SERVER_PORT} ...")
-
-    # Open browser after a short delay so uvicorn is ready
-    threading.Thread(
-        target=lambda: (time.sleep(1.0), webbrowser.open(f"http://localhost:{_SERVER_PORT}")),
-        daemon=True,
-    ).start()
-
-    # Register SIGTERM handler so `kill <pid>` also cleans up
-    def _on_sigterm(signum: int, frame: object) -> None:  # noqa: ARG001
-        _cleanup()
-        sys.exit(0)
-
-    signal.signal(signal.SIGTERM, _on_sigterm)
-
-    try:
-        run_server(
-            port=_SERVER_PORT,
-            frontend_dist=_FRONTEND_DIST if _FRONTEND_DIST.exists() else None,
-        )
-    except KeyboardInterrupt:
-        pass
-    finally:
-        _cleanup()
-        typer.echo("Goodbye.")
+        base = pathlib.Path(__file__).parent.parent
+    return base / relative
 
 
 def _free_port(port: int) -> None:
@@ -111,11 +61,126 @@ def _free_port(port: int) -> None:
 
 
 def _cleanup() -> None:
-    """Clean up AGENTS.md on exit (opencode process is handled by server lifespan)."""
+    """Clean up on exit (opencode process is handled by server lifespan)."""
+    pass
+
+
+# ---------------------------------------------------------------------------
+# CLI app
+# ---------------------------------------------------------------------------
+
+app = typer.Typer(
+    name="slides-it",
+    help=(
+        "AI-powered HTML presentation generator.\n\n"
+        "Run without arguments to launch the web UI in your browser.\n"
+        "Use the web UI to pick a workspace folder, then chat with the AI\n"
+        "to generate beautiful self-contained HTML slide decks."
+    ),
+    no_args_is_help=False,
+    invoke_without_command=True,
+    rich_markup_mode="markdown",
+)
+
+template_app = typer.Typer(
+    help=(
+        "Manage presentation templates.\n\n"
+        "Templates control the visual style the AI uses when generating slides.\n"
+        "Each template is a directory with a SKILL.md (style instructions) and\n"
+        "a TEMPLATE.md (metadata). Built-in templates ship with slides-it;\n"
+        "community templates can be installed from the official registry or any URL."
+    ),
+    rich_markup_mode="markdown",
+)
+app.add_typer(template_app, name="template")
+
+_REGISTRY_URL = "https://raw.githubusercontent.com/slides-it/slides-it/main/registry.json"
+_SERVER_PORT = 3000
+_FRONTEND_DIST = _resource_path("frontend/dist")
+
+
+# ---------------------------------------------------------------------------
+# --version callback
+# ---------------------------------------------------------------------------
+
+def _version_callback(value: bool) -> None:
+    if value:
+        try:
+            ver = _pkg_version("slides-it")
+        except Exception:
+            ver = "unknown"
+        typer.echo(f"slides-it {ver}")
+        raise typer.Exit()
+
+
+# ---------------------------------------------------------------------------
+# Main entry point — `slides-it` with no subcommand launches the app
+# ---------------------------------------------------------------------------
+
+@app.callback(invoke_without_command=True)
+def _launch(
+    ctx: typer.Context,
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version", "-V",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show version and exit.",
+        ),
+    ] = False,
+) -> None:
+    """Launch the slides-it web UI."""
+    if ctx.invoked_subcommand is not None:
+        return
+
+    # Check opencode is installed
+    if not shutil.which("opencode"):
+        typer.echo("Error: opencode is not installed.", err=True)
+        typer.echo("Install it with: curl -fsSL https://opencode.ai/install | bash", err=True)
+        raise typer.Exit(1)
+
+    # Free the port if a previous slides-it left it occupied
+    _free_port(_SERVER_PORT)
+
+    from slides_it.server import run as run_server
+
+    if not _FRONTEND_DIST.exists():
+        typer.echo(
+            "Warning: frontend/dist not found. Run `cd frontend && npm run build` first.",
+            err=True,
+        )
+
     try:
-        TemplateManager().cleanup_rules()
+        ver = _pkg_version("slides-it")
     except Exception:
+        ver = "?"
+
+    typer.echo(f"slides-it v{ver} — http://localhost:{_SERVER_PORT}")
+
+    # Open browser after a short delay so uvicorn is ready
+    threading.Thread(
+        target=lambda: (time.sleep(1.0), webbrowser.open(f"http://localhost:{_SERVER_PORT}")),
+        daemon=True,
+    ).start()
+
+    # Register SIGTERM handler so `kill <pid>` also cleans up
+    def _on_sigterm(signum: int, frame: object) -> None:  # noqa: ARG001
+        _cleanup()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
+    try:
+        run_server(
+            port=_SERVER_PORT,
+            frontend_dist=_FRONTEND_DIST if _FRONTEND_DIST.exists() else None,
+        )
+    except KeyboardInterrupt:
         pass
+    finally:
+        _cleanup()
+        typer.echo("Goodbye.")
 
 
 def main() -> None:
@@ -251,3 +316,48 @@ def template_activate(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
     typer.echo(f"Active template: {name}")
+
+
+# ---------------------------------------------------------------------------
+# slides-it stop
+# ---------------------------------------------------------------------------
+
+@app.command("stop")
+def stop() -> None:
+    """Stop the slides-it server and opencode process."""
+    stopped_any = False
+
+    # Kill opencode on its port
+    if sys.platform != "win32":
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", ":4096"],
+                capture_output=True, text=True,
+            )
+            pids = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
+            for pid in pids:
+                subprocess.run(["kill", "-9", pid], check=False)
+            if pids:
+                typer.echo(f"Stopped opencode (port 4096, killed {len(pids)} process(es)).")
+                stopped_any = True
+        except FileNotFoundError:
+            pass
+
+    # Kill the slides-it Python server on its port
+    if sys.platform != "win32":
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{_SERVER_PORT}"],
+                capture_output=True, text=True,
+            )
+            pids = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
+            for pid in pids:
+                subprocess.run(["kill", "-9", pid], check=False)
+            if pids:
+                typer.echo(f"Stopped slides-it server (port {_SERVER_PORT}, killed {len(pids)} process(es)).")
+                stopped_any = True
+        except FileNotFoundError:
+            pass
+
+    if not stopped_any:
+        typer.echo("No slides-it processes found running.")

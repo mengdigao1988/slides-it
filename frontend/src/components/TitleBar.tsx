@@ -1,36 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
-
 interface TitleBarProps {
   agentStatus: 'checking' | 'online' | 'offline'
   agentVersion: string
-  activeTemplate: string
-  onTemplateChange: (name: string) => void
   onSettingsOpen: () => void
+  onTemplatesManage: () => void
 }
-
-const BUILTIN_TEMPLATES = ['default']
 
 export default function TitleBar({
   agentStatus,
   agentVersion,
-  activeTemplate,
-  onTemplateChange,
   onSettingsOpen,
+  onTemplatesManage,
 }: TitleBarProps) {
-  const [templates] = useState<string[]>(BUILTIN_TEMPLATES)
-  const [dropdownOpen, setDropdownOpen] = useState(false)
-  const dropdownRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
-
   const dotColor =
     agentStatus === 'online' ? 'var(--green-dot)'
     : agentStatus === 'checking' ? '#CA8A04'
@@ -59,64 +39,39 @@ export default function TitleBar({
 
       {/* Title */}
       <span
-        className="flex-1 text-xs font-semibold tracking-widest uppercase text-center select-none"
-        style={{ color: 'var(--text-secondary)' }}
+        className="flex-1 text-center select-none"
+        style={{
+          fontFamily: "'Söhne', ui-sans-serif, -apple-system, sans-serif",
+          fontSize: '1rem',
+          fontWeight: 600,
+          letterSpacing: '-0.01em',
+          color: 'var(--text-primary)',
+        }}
       >
         slides-it
       </span>
 
-      {/* Right side: template switcher + settings */}
+      {/* Right side: manage templates + settings */}
       <div className="flex items-center gap-2">
-        {/* Template switcher */}
-        <div className="relative" ref={dropdownRef}>
-          <button
-            onClick={() => setDropdownOpen((o) => !o)}
-            className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg transition-colors"
-            style={{
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-              background: dropdownOpen ? 'var(--bg-hover)' : 'transparent',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-            onMouseLeave={e => (e.currentTarget.style.background = dropdownOpen ? 'var(--bg-hover)' : 'transparent')}
-          >
-            <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: 'var(--text-secondary)' }} />
-            {activeTemplate}
-            <svg className="w-3 h-3 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-
-          {dropdownOpen && (
-            <div
-              className="absolute right-0 top-full mt-1 w-48 rounded-xl shadow-lg overflow-hidden z-50"
-              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}
-            >
-              <p
-                className="px-3 py-1.5 text-[10px] uppercase tracking-wider"
-                style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}
-              >
-                Templates
-              </p>
-              {templates.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => { onTemplateChange(t); setDropdownOpen(false) }}
-                  className="w-full text-left px-3 py-2 text-xs transition-colors"
-                  style={{
-                    background: t === activeTemplate ? 'var(--bg-user-msg)' : 'transparent',
-                    color: t === activeTemplate ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    fontWeight: t === activeTemplate ? 500 : 400,
-                  }}
-                  onMouseEnter={e => { if (t !== activeTemplate) e.currentTarget.style.background = 'var(--bg-hover)' }}
-                  onMouseLeave={e => { e.currentTarget.style.background = t === activeTemplate ? 'var(--bg-user-msg)' : 'transparent' }}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* Manage templates button */}
+        <button
+          onClick={onTemplatesManage}
+          className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg transition-colors"
+          style={{
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--border)',
+            background: 'transparent',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          title="Manage templates"
+        >
+          <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+          </svg>
+          Templates
+        </button>
 
         {/* Settings gear */}
         <button

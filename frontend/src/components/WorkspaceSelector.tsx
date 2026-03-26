@@ -81,11 +81,24 @@ export default function WorkspaceSelector({ onReady }: WorkspaceSelectorProps) {
     setStarting(true); setError('')
     try {
       await startWorkspace(selected)
+      const deadline = Date.now() + 30_000
       pollRef.current = window.setInterval(async () => {
         try {
           const s = await getStatus()
-          if (s.ready) { clearInterval(pollRef.current!); onReady(s.workspace, s.opencode_version) }
+          if (s.ready) {
+            clearInterval(pollRef.current!)
+            pollRef.current = null
+            setStarting(false)
+            onReady(s.workspace, s.opencode_version)
+            return
+          }
         } catch {}
+        if (Date.now() > deadline) {
+          clearInterval(pollRef.current!)
+          pollRef.current = null
+          setStarting(false)
+          setError('opencode did not start within 30 s. Check your installation and try again.')
+        }
       }, 800)
     } catch (e) { setError((e as Error).message); setStarting(false) }
   }

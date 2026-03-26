@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed to create GitHub Releases and upload assets
+
+jobs:
+  build:
+    name: Build (${{ matrix.artifact }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14        # Apple Silicon (arm64)
+            artifact: slides-it-macos-arm64
+          - os: macos-13        # Intel (x86_64)
+            artifact: slides-it-macos-x86_64
+          - os: ubuntu-22.04    # Linux x86_64
+            artifact: slides-it-linux-x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: 'latest'
+
+      - name: Install Python dependencies
+        run: uv sync --all-extras
+
+      - name: Install PyInstaller
+        run: uv add --dev pyinstaller
+
+      - name: Build binary
+        run: bash build.sh
+
+      - name: Rename artifact
+        run: |
+          mv dist/slides-it dist/${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          retention-days: 1
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Flatten artifact directories
+        # download-artifact puts each in its own subdirectory; flatten to dist/
+        run: |
+          for dir in dist/*/; do
+            name=$(basename "$dir")
+            mv "${dir}${name}" "dist/${name}"
+            rmdir "$dir"
+          done
+          ls -lh dist/
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "slides-it v${{ steps.version.outputs.version }}"
+          body: |
+            ## slides-it v${{ steps.version.outputs.version }}
+
+            ### Install
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+            ```
+
+            ### Manual download
+
+            | Platform | Binary |
+            |----------|--------|
+            | macOS (Apple Silicon) | `slides-it-macos-arm64` |
+            | macOS (Intel)         | `slides-it-macos-x86_64` |
+            | Linux (x86_64)        | `slides-it-linux-x86_64` |
+
+            Rename the downloaded file to `slides-it`, make it executable (`chmod +x slides-it`),
+            and move it somewhere on your `$PATH`.
+
+            ### Requirements
+
+            - [opencode](https://opencode.ai) must be installed (`curl -fsSL https://opencode.ai/install | bash`)
+          files: |
+            dist/slides-it-macos-arm64
+            dist/slides-it-macos-x86_64
+            dist/slides-it-linux-x86_64
+          fail_on_unmatched_files: true
+          generate_release_notes: false

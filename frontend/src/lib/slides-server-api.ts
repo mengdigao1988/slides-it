@@ -101,6 +101,59 @@ export function setModel(modelID: string): Promise<{ modelID: string }> {
   })
 }
 
+export interface TemplateSkillResponse {
+  skill: string
+}
+
+/**
+ * Fetch the combined system prompt (core SKILL.md + template SKILL.md)
+ * for the given template name.
+ */
+export function getTemplateSkill(name: string): Promise<TemplateSkillResponse> {
+  return request<TemplateSkillResponse>(`/api/template/${encodeURIComponent(name)}/skill`)
+}
+
+export interface TemplatePreviewResponse {
+  html: string
+}
+
+export function getTemplatePreview(name: string): Promise<TemplatePreviewResponse> {
+  return request<TemplatePreviewResponse>(`/api/template/${encodeURIComponent(name)}/preview`)
+}
+
+export interface TemplateEntry {
+  name: string
+  description: string
+  author: string
+  version: string
+  builtin: boolean
+  active: boolean
+  has_preview: boolean
+}
+
+export function listTemplates(): Promise<TemplateEntry[]> {
+  return request<TemplateEntry[]>('/api/templates')
+}
+
+export function installTemplate(source: string): Promise<{ name: string; status: string }> {
+  return request<{ name: string; status: string }>('/api/templates/install', {
+    method: 'POST',
+    body: JSON.stringify({ source }),
+  })
+}
+
+export function removeTemplate(name: string): Promise<{ name: string; status: string }> {
+  return request<{ name: string; status: string }>(`/api/templates/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function activateTemplate(name: string): Promise<{ name: string; status: string }> {
+  return request<{ name: string; status: string }>(`/api/templates/${encodeURIComponent(name)}/activate`, {
+    method: 'PUT',
+  })
+}
+
 export interface SettingsResponse {
   providerID: string
   apiKeyMasked: string
@@ -124,6 +177,19 @@ export function saveSettings(s: SettingsRequest): Promise<{ status: string }> {
   return request<{ status: string }>('/api/settings', {
     method: 'PUT',
     body: JSON.stringify(s),
+  })
+}
+
+/** Return the persisted session ID for the current workspace, or null if none. */
+export function getSession(): Promise<{ session_id: string | null }> {
+  return request<{ session_id: string | null }>('/api/session')
+}
+
+/** Persist the active session ID to .slides-it/session.json in the workspace. */
+export function saveSession(sessionId: string): Promise<{ status: string }> {
+  return request<{ status: string }>('/api/session', {
+    method: 'PUT',
+    body: JSON.stringify({ session_id: sessionId }),
   })
 }
 

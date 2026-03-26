@@ -156,7 +156,7 @@ export default function PreviewPanel({ htmlFile }: PreviewPanelProps) {
           src={iframeSrc ?? undefined}
           className="flex-1 w-full border-0"
           title="Slide preview"
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts"
         />
       )}
     </div>

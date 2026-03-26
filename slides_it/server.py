@@ -51,10 +51,12 @@ _workspace_dir: str = ""
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[type-arg]
+    # On startup: clean up any stale slides-it AGENTS.md block left by an older
+    # version that used write_rules(). slides-it no longer owns that file.
+    _cleanup_stale_agents_md()
     yield
     # Cleanup on shutdown
     _stop_opencode()
-    TemplateManager().cleanup_rules()
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +113,24 @@ class SettingsRequest(BaseModel):
     baseURL: str
     customModel: str
     clearKey: bool = False
+
+
+class TemplateEntry(BaseModel):
+    name: str
+
+
+class SessionRequest(BaseModel):
+    session_id: str
+    description: str
+    author: str
+    version: str
+    builtin: bool
+    active: bool
+    has_preview: bool
+
+
+class InstallTemplateRequest(BaseModel):
+    source: str   # URL, github:user/repo, or registry name
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +218,6 @@ def list_entries(path: str = Query(default="~")) -> list[FsEntry]:
 def start_workspace(req: StartRequest) -> dict[str, str]:
     """
     Start opencode serve in the given directory.
-    Writes the slides-it system prompt to ~/.config/opencode/AGENTS.md first.
     If opencode is already healthy on the expected port, reuse it.
     """
     global _opencode_proc, _workspace_dir
@@ -206,9 +225,6 @@ def start_workspace(req: StartRequest) -> dict[str, str]:
     directory = pathlib.Path(req.directory).expanduser().resolve()
     if not directory.exists() or not directory.is_dir():
         raise HTTPException(status_code=400, detail=f"Directory not found: {req.directory}")
-
-    # Write system prompt rules
-    TemplateManager().write_rules()
 
     # Create .slides-it directory in workspace (for future session persistence etc.)
     (directory / ".slides-it").mkdir(exist_ok=True)
@@ -265,9 +281,41 @@ async def shutdown() -> dict[str, str]:
     Graceful shutdown triggered by the browser window closing.
     Sends SIGTERM to self after the response is delivered.
     """
-    loop = asyncio.get_event_loop()
-    loop.call_later(0.1, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    asyncio.get_running_loop().call_later(0.1, lambda: os.kill(os.getpid(), signal.SIGTERM))
     return {"status": "shutting_down"}
+
+
+@app.get("/api/session")
+def get_session() -> dict[str, str | None]:
+    """
+    Return the persisted session ID for the current workspace, or null if none.
+    The session ID is stored in <workspace>/.slides-it/session.json.
+    """
+    if not _workspace_dir:
+        return {"session_id": None}
+    session_file = pathlib.Path(_workspace_dir) / ".slides-it" / "session.json"
+    if not session_file.exists():
+        return {"session_id": None}
+    try:
+        data = json.loads(session_file.read_text())
+        return {"session_id": data.get("session_id")}
+    except Exception:
+        return {"session_id": None}
+
+
+@app.put("/api/session")
+def save_session(req: SessionRequest) -> dict[str, str]:
+    """
+    Persist the active session ID to <workspace>/.slides-it/session.json.
+    Called by the frontend immediately after creating or resuming a session.
+    """
+    if not _workspace_dir:
+        raise HTTPException(status_code=400, detail="No active workspace")
+    slides_dir = pathlib.Path(_workspace_dir) / ".slides-it"
+    slides_dir.mkdir(exist_ok=True)
+    session_file = slides_dir / "session.json"
+    session_file.write_text(json.dumps({"session_id": req.session_id}))
+    return {"status": "saved"}
 
 
 @app.get("/api/models")
@@ -299,6 +347,100 @@ def set_model(body: dict[str, str]) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="modelID is required")
     TemplateManager().set_model(model_id)
     return {"modelID": model_id}
+
+
+@app.get("/api/template/{name}/skill")
+def get_template_skill(name: str) -> dict[str, str]:
+    """
+    Return the combined system prompt for the given template.
+
+    Concatenates core SKILL.md + template SKILL.md. The frontend sends this
+    as the `system` field in POST /session/:id/prompt_async so that the active
+    template's visual style is injected on every message without touching any
+    config files on disk.
+    """
+    tm = TemplateManager()
+    try:
+        skill = tm.build_prompt(name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"skill": skill}
+
+
+@app.get("/api/template/{name}/preview")
+def get_template_preview(name: str) -> dict[str, str]:
+    """
+    Return the raw HTML content of preview.html for the given template.
+    The frontend injects this into an iframe via srcdoc.
+    """
+    tm = TemplateManager()
+    path = tm._template_path(name)
+    if not path:
+        raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
+    preview_file = path / "preview.html"
+    if not preview_file.exists():
+        raise HTTPException(status_code=404, detail=f"Template '{name}' has no preview.html")
+    return {"html": preview_file.read_text(encoding="utf-8")}
+
+
+@app.get("/api/templates", response_model=list[TemplateEntry])
+def list_templates() -> list[TemplateEntry]:
+    """Return all installed templates with metadata."""
+    tm = TemplateManager()
+    active = tm.active()
+    result = []
+    for info in tm.list():
+        path = tm._template_path(info.name)
+        has_preview = bool(path and (path / "preview.html").exists())
+        result.append(TemplateEntry(
+            name=info.name,
+            description=info.description,
+            author=info.author,
+            version=info.version,
+            builtin=info.builtin,
+            active=info.name == active,
+            has_preview=has_preview,
+        ))
+    return result
+
+
+@app.post("/api/templates/install")
+def install_template(req: InstallTemplateRequest) -> dict[str, str]:
+    """
+    Install a template from any source (URL, github:user/repo, registry name).
+    Returns the installed template name.
+    """
+    source = req.source.strip()
+    if not source:
+        raise HTTPException(status_code=400, detail="source is required")
+    tm = TemplateManager()
+    try:
+        name = tm.install(source)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"name": name, "status": "installed"}
+
+
+@app.delete("/api/templates/{name}")
+def delete_template(name: str) -> dict[str, str]:
+    """Remove a user-installed template. Built-in templates cannot be removed."""
+    tm = TemplateManager()
+    try:
+        tm.remove(name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"name": name, "status": "removed"}
+
+
+@app.put("/api/templates/{name}/activate")
+def activate_template(name: str) -> dict[str, str]:
+    """Set the active template."""
+    tm = TemplateManager()
+    try:
+        tm.activate(name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"name": name, "status": "activated"}
 
 
 @app.get("/api/settings", response_model=SettingsResponse)
@@ -402,6 +544,32 @@ def mount_frontend(dist_path: pathlib.Path) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_OPENCODE_AGENTS_MD = pathlib.Path.home() / ".config" / "opencode" / "AGENTS.md"
+_SLIDES_IT_MARKER = "<!-- slides-it managed -->"
+
+
+def _cleanup_stale_agents_md() -> None:
+    """
+    Remove any slides-it block left in ~/.config/opencode/AGENTS.md by an older
+    version that used write_rules(). slides-it no longer writes to that file;
+    system prompts are passed per-message via the `system` API field instead.
+    Safe to call on every startup — no-ops if the file doesn't exist or has no
+    slides-it marker.
+    """
+    if not _OPENCODE_AGENTS_MD.exists():
+        return
+    text = _OPENCODE_AGENTS_MD.read_text(encoding="utf-8")
+    if _SLIDES_IT_MARKER not in text:
+        return
+    parts = text.split(_SLIDES_IT_MARKER)
+    # Preserve any user content that existed outside the slides-it block
+    tail = parts[-1].strip() if len(parts) > 2 else ""
+    if tail:
+        _OPENCODE_AGENTS_MD.write_text(tail, encoding="utf-8")
+    else:
+        _OPENCODE_AGENTS_MD.unlink(missing_ok=True)
+
+
 def _is_opencode_healthy() -> bool:
     """Return True if opencode is already responding on OPENCODE_PORT."""
     try:
@@ -416,10 +584,15 @@ def _is_opencode_healthy() -> bool:
 
 def _write_auth_json(provider_id: str, api_key: str) -> None:
     """
-    Write or remove the API key in opencode's auth.json.
+    Write or remove the API key in opencode's global auth.json.
+
+    IMPORTANT — call only from PUT /api/settings (explicit user save).
+    Never call this from startup, /api/start, or any automatic path.
+    opencode's auth.json is the user's global credential store; slides-it
+    must not overwrite it without explicit user intent.
 
     Args:
-        provider_id: opencode provider identifier (e.g. "anthropic", "custom").
+        provider_id: opencode provider identifier (e.g. "anthropic", "openai").
         api_key:     raw key string; empty string removes the entry.
     """
     auth: dict = {}
@@ -453,10 +626,17 @@ def _write_opencode_json(workspace: str, provider_id: str, base_url: str, custom
     if cfg_path.exists():
         try:
             text = cfg_path.read_text(encoding="utf-8")
-            # Strip JSON-with-comments (opencode uses .jsonc style)
-            import re
-            text = re.sub(r"//.*", "", text)
-            cfg = json.loads(text)
+            # Try standard JSON first (slides-it always writes valid JSON).
+            # Fall back to line-by-line comment stripping only if that fails,
+            # to handle opencode.json files that users may have annotated with
+            # // comments.  Strip only lines whose first non-whitespace chars
+            # are "//" so that URLs like "https://..." are never touched.
+            try:
+                cfg = json.loads(text)
+            except json.JSONDecodeError:
+                import re
+                stripped = re.sub(r"(?m)^\s*//.*$", "", text)
+                cfg = json.loads(stripped)
         except Exception:
             cfg = {}
 
