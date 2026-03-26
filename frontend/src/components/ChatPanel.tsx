@@ -85,6 +85,8 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
   // Refs that mirror state so SSE callbacks always read the latest values
   const sessionIdRef = useRef<string | null>(null)
   const messagesRef = useRef<ChatMessage[]>([])
+  // True during initSession — blocks the idle SSE handler from wiping restored state
+  const restoringRef = useRef(true)
   const pendingCharsRef = useRef<PendingMap>(new Map())
   const rafRef = useRef<number | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -201,42 +203,42 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
     let cancelled = false
 
     async function initSession() {
-      // Try to restore message history saved in .slides-it/history.json.
-      // We always create a fresh OpenCode session (old ones don't survive
-      // a server restart), but we display the saved messages so the user
-      // can see their conversation history.
+      restoringRef.current = true   // block idle SSE handler during setup
+
+      // Load saved history from .slides-it/session-<id>.json (via server)
       let savedMessages: ChatMessage[] = []
       try {
         const saved = await getSession()
         if (saved.messages && saved.messages.length > 0) {
-          // Deserialise: timestamps come back as strings, convert to Date
           savedMessages = (saved.messages as ChatMessage[]).map((m) => ({
             ...m,
             timestamp: new Date(m.timestamp),
           }))
         }
-      } catch {
-        // No history file or read error — start fresh
-      }
+      } catch { /* no history — start fresh */ }
 
-      // Always create a fresh OpenCode session
+      if (cancelled) return
+
+      // Always create a fresh OpenCode session (old ones don't survive a server restart)
       try {
         const s = await createSession('slides-it')
-        if (!cancelled) {
-          setSessionId(s.id)
-          sessionIdRef.current = s.id
-          // Populate UI with saved history (display only — not re-sent to agent)
-          if (savedMessages.length > 0) {
-            setMessages(savedMessages)
-            messagesRef.current = savedMessages
-            // Restore the preview panel with the most recent HTML file
-            detectHtmlFile()
-          }
-          // Persist new session ID (keep saved messages intact)
-          saveSession(s.id, savedMessages).catch(() => {})
+        if (cancelled) return
+
+        setSessionId(s.id)
+        sessionIdRef.current = s.id
+
+        if (savedMessages.length > 0) {
+          setMessages(savedMessages)
+          messagesRef.current = savedMessages
+          detectHtmlFile()
         }
+
+        // Write new session file immediately (pointer → new session, messages = saved history)
+        saveSession(s.id, savedMessages).catch(() => {})
       } catch (err) {
         console.error(err)
+      } finally {
+        restoringRef.current = false   // unlock idle handler regardless of outcome
       }
     }
 
@@ -263,10 +265,13 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
     if (type === 'session.status') {
       const status = (properties.status as { type: string })?.type
       if (status === 'idle') {
+        // Skip during initSession — prevents the reconnected SSE stream from
+        // wiping restored messages before they're set in state
+        if (restoringRef.current) return
         flushPending()
         setMessages((prev) => {
           const settled = prev.map((m) => m.streaming ? { ...m, streaming: false } : m)
-          // Persist history on every idle — use refs to avoid stale closure
+          // Persist full conversation after every agent turn
           if (sessionIdRef.current) {
             saveSession(sessionIdRef.current, settled).catch(() => {})
           }
@@ -498,12 +503,18 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
     // Build display text (show @ refs in bubble)
     const attachmentNames = atReferences.map((r) => r.name)
 
-    setMessages((prev) => [...prev, {
+    const userMsg: ChatMessage = {
       id: `u-${Date.now()}`, role: 'user', text, streaming: false,
       error: null, timestamp: new Date(), tools: [],
       attachmentNames: attachmentNames.length > 0 ? attachmentNames : undefined,
-    }])
+    }
+    setMessages((prev) => [...prev, userMsg])
     setSending(true)
+
+    // Persist immediately so the user's message survives even if the agent crashes
+    if (sessionId) {
+      saveSession(sessionId, [...messagesRef.current, userMsg]).catch(() => {})
+    }
 
     try {
       await sendPrompt(sessionId, textWithRefs, currentModel || undefined, currentMode, fileParts, activeSkill || undefined)

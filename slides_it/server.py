@@ -290,19 +290,26 @@ async def shutdown() -> dict[str, str]:
 def get_session() -> dict[str, object]:
     """
     Return the persisted session ID and message history for the current workspace.
-    Both are stored in <workspace>/.slides-it/history.json.
+
+    Layout inside <workspace>/.slides-it/:
+      current                   — plain text, contains the active session ID
+      session-<id>.json         — messages for that session
     """
     if not _workspace_dir:
         return {"session_id": None, "messages": []}
-    history_file = pathlib.Path(_workspace_dir) / ".slides-it" / "history.json"
-    if not history_file.exists():
+    slides_dir = pathlib.Path(_workspace_dir) / ".slides-it"
+    current_file = slides_dir / "current"
+    if not current_file.exists():
         return {"session_id": None, "messages": []}
     try:
-        data = json.loads(history_file.read_text())
-        return {
-            "session_id": data.get("session_id"),
-            "messages": data.get("messages", []),
-        }
+        session_id = current_file.read_text(encoding="utf-8").strip()
+        if not session_id:
+            return {"session_id": None, "messages": []}
+        session_file = slides_dir / f"session-{session_id}.json"
+        if not session_file.exists():
+            return {"session_id": session_id, "messages": []}
+        data = json.loads(session_file.read_text(encoding="utf-8"))
+        return {"session_id": session_id, "messages": data.get("messages", [])}
     except Exception:
         return {"session_id": None, "messages": []}
 
@@ -310,18 +317,22 @@ def get_session() -> dict[str, object]:
 @app.put("/api/session")
 def save_session(req: SessionRequest) -> dict[str, str]:
     """
-    Persist the active session ID and message history to
-    <workspace>/.slides-it/history.json.
-    Called by the frontend after each completed agent turn.
+    Persist messages to <workspace>/.slides-it/session-<id>.json
+    and update the 'current' pointer.
+    Old session files are kept (not deleted).
     """
     if not _workspace_dir:
         raise HTTPException(status_code=400, detail="No active workspace")
     slides_dir = pathlib.Path(_workspace_dir) / ".slides-it"
     slides_dir.mkdir(exist_ok=True)
-    history_file = slides_dir / "history.json"
-    history_file.write_text(
-        json.dumps({"session_id": req.session_id, "messages": req.messages})
+    # Write messages to the session-scoped file
+    session_file = slides_dir / f"session-{req.session_id}.json"
+    session_file.write_text(
+        json.dumps({"messages": req.messages}, ensure_ascii=False),
+        encoding="utf-8",
     )
+    # Update the current pointer
+    (slides_dir / "current").write_text(req.session_id, encoding="utf-8")
     return {"status": "saved"}
 
 
