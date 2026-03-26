@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "name": "default",
+      "description": "Clean modern dark theme — works for any topic",
+      "url": "bundled",
+      "preview": "https://raw.githubusercontent.com/slides-it/slides-it/main/slides_it/templates/default/preview.png",
+      "author": "slides-it",
+      "version": "1.0.0"
+    }
+  ]
+}
