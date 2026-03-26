@@ -2,7 +2,9 @@
 
 **Stop making slides. Start making points.**
 
-![slides-it — chat panel with AI Q&A on the left, generated slide preview on the right](img/title-page.png)
+<p align="center">
+  <img src="img/title-page.png" width="780" alt="slides-it — chat panel with AI Q&A on the left, generated slide preview on the right" />
+</p>
 
 ---
 
@@ -52,7 +54,9 @@ Most "templates" are just color schemes slapped on the same layout. slides-it te
 
 Switch templates mid-conversation with one click. The AI is immediately re-briefed and applies the new aesthetic to everything going forward.
 
-![Switch templates with one click — the AI instantly acknowledges the new style](img/template-change-with-one-click.png)
+<p align="center">
+  <img src="img/template-change-with-one-click.png" width="620" alt="Switch templates with one click — the AI instantly acknowledges the new style" />
+</p>
 
 Ships with two:
 
@@ -81,7 +85,9 @@ Navigate your project files directly in the sidebar. Click any `.html` file to p
 
 Type `@` anywhere in the chat to search and attach files from your workspace. The AI reads them directly — useful for feeding in a content outline, a data file, or an existing slide draft to base the new deck on.
 
-![@ file reference popover — search and attach any file from your workspace](img/ez-file-ref.png)
+<p align="center">
+  <img src="img/ez-file-ref.png" width="380" alt="@ file reference popover — search and attach any file from your workspace" />
+</p>
 
 ### Live preview panel
 
@@ -111,7 +117,9 @@ slides-it
 
 A browser window opens. Pick a workspace folder. Start talking.
 
-![Workspace folder picker](img/workspace.png)
+<p align="center">
+  <img src="img/workspace.png" width="460" alt="Workspace folder picker" />
+</p>
 
 Set your Anthropic API key in the ⚙ settings panel — or pass it in your environment:
 
