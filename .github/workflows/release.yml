@@ -104,15 +104,8 @@ jobs:
         with:
           path: dist/
 
-      - name: Flatten artifact directories
-        # download-artifact puts each in its own subdirectory; flatten to dist/
-        run: |
-          for dir in dist/*/; do
-            name=$(basename "$dir")
-            mv "${dir}${name}" "dist/${name}"
-            rmdir "$dir"
-          done
-          ls -lh dist/
+      - name: List downloaded artifacts
+        run: find dist/ -type f | sort
 
       - name: Extract version from tag
         id: version
@@ -147,7 +140,7 @@ jobs:
 
             - [opencode](https://opencode.ai) must be installed (`curl -fsSL https://opencode.ai/install | bash`)
           files: |
-            dist/slides-it-macos-arm64
-            dist/slides-it-linux-x86_64
+            dist/slides-it-macos-arm64/slides-it-macos-arm64
+            dist/slides-it-linux-x86_64/slides-it-linux-x86_64
           fail_on_unmatched_files: true
           generate_release_notes: false
