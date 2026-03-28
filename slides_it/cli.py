@@ -155,7 +155,7 @@ def _launch(
     try:
         ver = _pkg_version("slides-it")
     except Exception:
-        ver = "?"
+        ver = _BUNDLED_VERSION
 
     typer.echo(f"slides-it v{ver} — http://localhost:{_SERVER_PORT}")
 
@@ -179,6 +179,9 @@ def _launch(
         )
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        typer.echo(f"Error: server crashed — {e}", err=True)
+        raise typer.Exit(1)
     finally:
         _cleanup()
         typer.echo("Goodbye.")
