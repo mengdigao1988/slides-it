@@ -241,7 +241,6 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
         if (savedMessages.length > 0) {
           setMessages(savedMessages)
           messagesRef.current = savedMessages
-          detectHtmlFile()
         }
 
         // Write new session file immediately (pointer → new session, messages = saved history)
@@ -285,7 +284,6 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
         setSending(false)
         runningToolRef.current = ''
         setRunningTool('')
-        detectHtmlFile()
         // Push save to next event loop tick so React has committed state
         // and messagesRef.current holds the fully settled messages
         setTimeout(() => {
@@ -322,6 +320,17 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
     if (type === 'session.diff') {
       const diff = properties.diff
       onDiffsChange?.(Array.isArray(diff) ? diff as FileDiff[] : [])
+    }
+
+    if (type === 'file.edited') {
+      const file = properties.file as string | undefined
+      if (file?.endsWith('.html')) {
+        // file.edited always carries an absolute path from opencode
+        const absPath = file.startsWith('/')
+          ? file
+          : `${workspacePath}/${file}`
+        onHtmlGenerated(absPath)
+      }
     }
 
     if (type === 'message.updated') {
@@ -471,36 +480,6 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
         ))
       }
     }
-  }
-
-  function detectHtmlFile() {
-    if (!workspacePath) return
-
-    // Look in <workspace>/slides/ first (AI always writes there),
-    // then fall back to workspace root. Uses our own /api/ls which is
-    // workspace-scoped and won't pick up false positives from large dirs.
-    const slidesDir = `${workspacePath}/slides`
-    fetch(`http://localhost:3000/api/ls?path=${encodeURIComponent(slidesDir)}`)
-      .then((r) => r.ok ? r.json() : Promise.reject())
-      .then((entries: Array<{ name: string; path: string; type: string }>) => {
-        const html = entries
-          .filter((e) => e.type === 'file' && e.name.endsWith('.html'))
-          .sort((a, b) => b.name.localeCompare(a.name))[0]
-        if (html) {
-          onHtmlGenerated(html.path)
-          return
-        }
-        // Fallback: check workspace root
-        return fetch(`http://localhost:3000/api/ls?path=${encodeURIComponent(workspacePath)}`)
-          .then((r) => r.json())
-          .then((rootEntries: Array<{ name: string; path: string; type: string }>) => {
-            const rootHtml = rootEntries
-              .filter((e) => e.type === 'file' && e.name.endsWith('.html'))
-              .sort((a, b) => b.name.localeCompare(a.name))[0]
-            if (rootHtml) onHtmlGenerated(rootHtml.path)
-          })
-      })
-      .catch(() => {})
   }
 
   async function handleSend() {

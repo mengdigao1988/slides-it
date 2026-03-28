@@ -100,10 +100,7 @@ export default function App() {
               refreshToken={fileTreeRefreshToken}
               onFileClick={(path) => {
                 if (path.endsWith('.html')) {
-                  const rel = path.startsWith(workspacePath + '/')
-                    ? path.slice(workspacePath.length + 1)
-                    : path
-                  setPreviewFile(rel)
+                  setPreviewFile(path)
                 }
               }}
             />
@@ -117,6 +114,7 @@ export default function App() {
             activeTemplate={activeTemplate}
             onTemplateChange={handleTemplateChange}
             onHtmlGenerated={(path) => {
+              // path is always absolute — pass directly to PreviewPanel
               setPreviewFile(path)
               setFileTreeRefreshToken((t) => t + 1)
             }}
