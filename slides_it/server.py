@@ -488,10 +488,14 @@ def get_settings() -> SettingsResponse:
 @app.put("/api/settings")
 def save_settings(req: SettingsRequest) -> dict[str, str]:
     """
-    Persist provider settings.
+    Persist provider settings and restart the OpenCode process so the new
+    provider / API key takes effect immediately without requiring the user
+    to manually switch workspaces.
 
     - Writes API key to opencode's auth.json.
     - Writes baseURL / custom provider config to workspace opencode.json (if workspace active).
+    - Restarts the running opencode process (if one is managed by us) so the new
+      config is picked up on the very next message.
     - clearKey=True removes the stored key (falls back to opencode free tier).
     """
     tm = TemplateManager()
@@ -510,7 +514,54 @@ def save_settings(req: SettingsRequest) -> dict[str, str]:
     if _workspace_dir:
         _write_opencode_json(_workspace_dir, req.providerID, req.baseURL, req.customModel)
 
-    return {"status": "saved"}
+    # Restart opencode so the new auth / provider config takes effect immediately.
+    # Only restart if we're currently managing an opencode process.
+    restarted = False
+    global _opencode_proc
+    if _opencode_proc is not None and _workspace_dir:
+        _stop_opencode()
+        _opencode_proc = subprocess.Popen(
+            ["opencode", "serve", "--port", str(OPENCODE_PORT)],
+            cwd=_workspace_dir,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        restarted = True
+
+    return {"status": "restarting" if restarted else "saved"}
+
+
+@app.get("/api/file-base64")
+def get_file_base64(path: str = Query(...)) -> dict[str, str]:
+    """
+    Read a file as raw bytes and return it base64-encoded.
+
+    Used by the frontend to attach binary files (images, PDFs) as FileParts
+    for the AI. Reading via this endpoint avoids the text-encoding corruption
+    that occurs when binary data is fetched through opencode's /file/content
+    endpoint (which treats all file content as UTF-8 text).
+
+    Args:
+        path: Absolute path to the file on disk.
+
+    Returns:
+        { "base64": "<base64-encoded bytes>", "mime": "<mime-type>" }
+    """
+    file_path = pathlib.Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    import base64
+    import mimetypes
+
+    mime, _ = mimetypes.guess_type(str(file_path))
+    if not mime:
+        mime = "application/octet-stream"
+
+    data = file_path.read_bytes()
+    b64 = base64.b64encode(data).decode("ascii")
+
+    return {"base64": b64, "mime": mime}
 
 
 @app.post("/api/upload")

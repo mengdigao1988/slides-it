@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getSettings, saveSettings } from '../lib/slides-server-api'
+import { getSettings, saveSettings, getStatus } from '../lib/slides-server-api'
 
 interface SettingsModalProps {
   open: boolean
@@ -24,6 +24,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [customModel, setCustomModel]   = useState('')
   const [showKey, setShowKey]           = useState(false)
   const [saving, setSaving]             = useState(false)
+  const [restarting, setRestarting]     = useState(false)
   const [error, setError]               = useState('')
   const [success, setSuccess]           = useState(false)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -63,13 +64,35 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
     setSaving(true); setError('')
     try {
-      await saveSettings({ providerID, apiKey, baseURL, customModel, clearKey: false })
-      setSuccess(true)
-      setTimeout(() => { setSuccess(false); onClose() }, 800)
+      const result = await saveSettings({ providerID, apiKey, baseURL, customModel, clearKey: false })
+      if (result.status === 'restarting') {
+        // Server is restarting opencode — poll until it's healthy, then close
+        setSaving(false)
+        setRestarting(true)
+        await pollUntilReady(8000)
+        setRestarting(false)
+        setSuccess(true)
+        setTimeout(() => { setSuccess(false); onClose() }, 800)
+      } else {
+        setSuccess(true)
+        setTimeout(() => { setSuccess(false); onClose() }, 800)
+      }
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  /** Poll /api/status until opencode is healthy or timeout is reached. */
+  async function pollUntilReady(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 600))
+      try {
+        const s = await getStatus()
+        if (s.ready) return
+      } catch { /* not up yet */ }
     }
   }
 
@@ -278,7 +301,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               border: '1px solid var(--border)',
             }}
           >
-            Changes take effect the next time opencode starts (after selecting a workspace).
+            Saving will automatically restart the AI engine so your new provider settings take effect immediately.
           </p>
 
           {/* Error */}
@@ -294,7 +317,8 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
         >
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-lg text-sm transition-colors"
+            disabled={restarting}
+            className="px-4 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-40"
             style={{
               color: 'var(--text-secondary)',
               border: '1px solid var(--border)',
@@ -307,16 +331,16 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           </button>
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || restarting}
             className="px-4 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40"
             style={{
               background: success ? '#16A34A' : 'var(--btn-send)',
               color: '#fff',
             }}
-            onMouseEnter={e => { if (!saving) e.currentTarget.style.background = success ? '#16A34A' : 'var(--btn-send-hover)' }}
+            onMouseEnter={e => { if (!saving && !restarting) e.currentTarget.style.background = success ? '#16A34A' : 'var(--btn-send-hover)' }}
             onMouseLeave={e => (e.currentTarget.style.background = success ? '#16A34A' : 'var(--btn-send)')}
           >
-            {saving ? 'Saving…' : success ? 'Saved ✓' : 'Save'}
+            {saving ? 'Saving…' : restarting ? 'Restarting AI…' : success ? 'Saved ✓' : 'Save'}
           </button>
         </div>
       </div>

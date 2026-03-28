@@ -1,6 +1,8 @@
 // OpenCode Server API client
 // All communication with opencode serve (localhost:4096) goes through here.
 
+import { getFileBase64 } from './slides-server-api'
+
 const BASE = 'http://localhost:4096'
 
 export interface Health {
@@ -244,19 +246,20 @@ export function isAttachableAsFile(filename: string): boolean {
 }
 
 /**
- * Read a binary file (image/PDF) via opencode and return a FilePart.
+ * Read a binary file (image/PDF) via the slides-it server and return a FilePart.
  * Only call this for files where isAttachableAsFile() returns true.
+ *
+ * Uses /api/file-base64 (reads raw bytes server-side) instead of opencode's
+ * /file/content (text-only) to avoid base64 corruption of binary data.
  */
 export async function fileToFilePart(path: string): Promise<FilePart> {
   const name = path.split('/').pop() ?? path
-  const mime = guessMime(name)
-  const { content } = await getFileContent(path)
-  const b64 = btoa(unescape(encodeURIComponent(content)))
+  const { base64, mime } = await getFileBase64(path)
   return {
     type: 'file',
     mime,
     filename: name,
-    url: `data:${mime};base64,${b64}`,
+    url: `data:${mime};base64,${base64}`,
   }
 }
 

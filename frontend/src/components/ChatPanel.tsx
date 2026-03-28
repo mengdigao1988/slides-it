@@ -30,7 +30,7 @@ import {
   type ToolEntry,
   type QuestionRequest,
 } from '../lib/typewriter'
-import { getModels, setModel, listTemplates, getSession, saveSession, type TemplateEntry } from '../lib/slides-server-api'
+import { getModels, setModel, listTemplates, getSession, saveSession, uploadFiles, type TemplateEntry } from '../lib/slides-server-api'
 import ThinkingDots from './ThinkingDots'
 import ToolBlock from './ToolBlock'
 import QuestionBlock from './QuestionBlock'
@@ -660,6 +660,49 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
     setAtReferences((prev) => prev.filter((r) => r.path !== path))
   }
 
+  /**
+   * Handle paste events on the textarea.
+   * If the clipboard contains image files (e.g. a screenshot via Cmd+V or
+   * drag-and-drop from another app), upload them to the workspace and inject
+   * @filename references so the AI receives them as FileParts.
+   * Plain-text paste falls through to the browser default.
+   */
+  async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = Array.from(e.clipboardData.items)
+    const imageItems = items.filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    if (imageItems.length === 0) return  // plain text — let browser handle it
+
+    e.preventDefault()
+    const files: File[] = []
+    for (const item of imageItems) {
+      const file = item.getAsFile()
+      if (file) {
+        // Give the file a meaningful name if it has none (e.g. "image.png")
+        const name = file.name && file.name !== 'image.png'
+          ? file.name
+          : `pasted-${Date.now()}.png`
+        files.push(new File([file], name, { type: file.type }))
+      }
+    }
+    if (files.length === 0) return
+
+    try {
+      const { uploaded } = await uploadFiles(files)
+      // Inject @filename badges for each uploaded image
+      for (const filename of uploaded) {
+        setAtReferences((prev) => {
+          // The server saves to workspace root; we need the full path.
+          // workspacePath is available in the outer component scope.
+          const fullPath = `${workspacePath}/${filename}`
+          if (prev.find((r) => r.path === fullPath)) return prev
+          return [...prev, { path: fullPath, name: filename }]
+        })
+      }
+    } catch {
+      // Upload failed silently — don't block the user
+    }
+  }
+
   // ── Shared input box ─────────────────────────────────────────────────────
   const inputBox = (
     <div className="relative">
@@ -717,6 +760,7 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
           onCompositionEnd={() => setIsComposing(false)}
           onChange={(e) => setInput(e.target.value)}
           onInput={handleInput}
+          onPaste={handlePaste}
           onKeyDown={(e) => {
             // Tab → toggle mode (when AtPopover is closed)
             if (e.key === 'Tab' && !isComposing && atQuery === null) {

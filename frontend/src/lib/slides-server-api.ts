@@ -180,6 +180,17 @@ export function saveSettings(s: SettingsRequest): Promise<{ status: string }> {
   })
 }
 
+/**
+ * Read a file as raw bytes and return its base64 encoding + MIME type.
+ * Use this instead of opencode's /file/content for binary files (images, PDFs)
+ * to avoid UTF-8 corruption.
+ */
+export function getFileBase64(path: string): Promise<{ base64: string; mime: string }> {
+  return request<{ base64: string; mime: string }>(
+    `/api/file-base64?path=${encodeURIComponent(path)}`,
+  )
+}
+
 /** Return the persisted session ID and message history for the current workspace. */
 export function getSession(): Promise<{ session_id: string | null; messages: object[] }> {
   return request<{ session_id: string | null; messages: object[] }>('/api/session')
