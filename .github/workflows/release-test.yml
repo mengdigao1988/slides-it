@@ -63,10 +63,10 @@ jobs:
           SERVER_PID=$!
           echo "Server PID: $SERVER_PID"
 
-          # Wait up to 10s for port 3000 to be ready
-          for i in $(seq 1 20); do
+          # Wait up to 30s for port 3000 to be ready
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
-              echo "Server is up"
+              echo "Server is up (attempt $i)"
               break
             fi
             sleep 0.5
@@ -77,7 +77,7 @@ jobs:
 
           # Stop cleanly
           ./slides-it stop
-          sleep 1
+          sleep 2
 
           # Verify port is free
           if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
