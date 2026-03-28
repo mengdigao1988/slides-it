@@ -1,6 +1,6 @@
 [project]
 name = "slides-it"
-version = "1.2.0"
+version = "1.2.1"
 description = "AI-powered HTML presentation generator built on OpenCode"
 readme = "README.md"
 license = { text = "MIT" }

@@ -106,7 +106,7 @@ export default function TemplatesModal({
     setInstalling(true)
     setInstallError('')
     try {
-      const res = await installTemplate(source)
+      const res = await installTemplate({ source })
       setInstallSource('')
       // Refresh list
       const list = await listTemplates()
