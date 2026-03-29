@@ -403,6 +403,30 @@ Do not generate a presentation unless the user asks for one.
 
 ---
 
+## Active Template Reference
+
+The active template name is in the HTML comment at the top of this prompt:
+
+```
+<!-- Active template: <name> -->
+```
+
+**Before generating any slides**, fetch the full template details in one call:
+
+```bash
+curl -s http://localhost:3000/api/template/<name>
+```
+
+The JSON response contains:
+- `skill_md` — style instructions (also injected below after the `---` separator)
+- `preview_html` — canonical 3-slide HTML that shows the exact colors, fonts,
+  layout patterns, and animations you must replicate. This is the ground truth
+  for visual style — match it precisely.
+
+If `preview_html` is `null`, use `skill_md` as the sole visual reference.
+
+---
+
 ## What Comes Next in This System Prompt
 
 The section after the `---` separator below contains the **visual style** for this

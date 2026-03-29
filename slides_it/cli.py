@@ -205,8 +205,7 @@ def template_list() -> None:
     typer.echo("")
     for t in templates:
         marker = " *" if t.name == active else "  "
-        tag = " [built-in]" if t.builtin else ""
-        typer.echo(f"{marker} {t.name}{tag}")
+        typer.echo(f"{marker} {t.name}")
         typer.echo(f"     {t.description}  (v{t.version}, by {t.author})")
     typer.echo("")
     typer.echo("* = active template")

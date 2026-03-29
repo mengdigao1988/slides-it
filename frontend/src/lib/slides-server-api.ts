@@ -121,12 +121,30 @@ export function getTemplatePreview(name: string): Promise<TemplatePreviewRespons
   return request<TemplatePreviewResponse>(`/api/template/${encodeURIComponent(name)}/preview`)
 }
 
+export interface TemplateDetail {
+  name: string
+  description: string
+  author: string
+  version: string
+  active: boolean
+  has_preview: boolean
+  skill_md: string
+  preview_html: string | null
+}
+
+/**
+ * Fetch full template details — metadata, SKILL.md, and preview.html — in one call.
+ * Mirrors the agent-facing GET /api/template/{name} endpoint.
+ */
+export function getTemplate(name: string): Promise<TemplateDetail> {
+  return request<TemplateDetail>(`/api/template/${encodeURIComponent(name)}`)
+}
+
 export interface TemplateEntry {
   name: string
   description: string
   author: string
   version: string
-  builtin: boolean
   active: boolean
   has_preview: boolean
 }

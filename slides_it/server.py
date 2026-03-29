@@ -120,9 +120,19 @@ class TemplateEntry(BaseModel):
     description: str
     author: str
     version: str
-    builtin: bool
     active: bool
     has_preview: bool
+
+
+class TemplateDetail(BaseModel):
+    name: str
+    description: str
+    author: str
+    version: str
+    active: bool
+    has_preview: bool
+    skill_md: str
+    preview_html: str | None
 
 
 class SessionRequest(BaseModel):
@@ -412,6 +422,41 @@ def get_template_preview(name: str) -> dict[str, str]:
     return {"html": preview_file.read_text(encoding="utf-8")}
 
 
+@app.get("/api/template/{name}", response_model=TemplateDetail)
+def get_template(name: str) -> TemplateDetail:
+    """
+    Return full details for a single template — metadata, SKILL.md, and preview.html.
+
+    Used by the AI agent to fetch the active template's visual reference in one
+    call before generating slides. Also available to the frontend for any future
+    use that needs all fields together.
+
+    preview_html is null if the template has no preview.html.
+    skill_md contains only the template's own SKILL.md (not the core skill).
+    """
+    tm = TemplateManager()
+    path = tm._template_path(name)
+    if not path:
+        raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
+    info = tm._parse_template_md(path / "TEMPLATE.md")
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Template '{name}' has no TEMPLATE.md")
+    skill_file = path / "SKILL.md"
+    if not skill_file.exists():
+        raise HTTPException(status_code=404, detail=f"Template '{name}' has no SKILL.md")
+    preview_file = path / "preview.html"
+    return TemplateDetail(
+        name=info.name,
+        description=info.description,
+        author=info.author,
+        version=info.version,
+        active=info.name == tm.active(),
+        has_preview=preview_file.exists(),
+        skill_md=skill_file.read_text(encoding="utf-8"),
+        preview_html=preview_file.read_text(encoding="utf-8") if preview_file.exists() else None,
+    )
+
+
 @app.get("/api/templates", response_model=list[TemplateEntry])
 def list_templates() -> list[TemplateEntry]:
     """Return all installed templates with metadata."""
@@ -426,7 +471,6 @@ def list_templates() -> list[TemplateEntry]:
             description=info.description,
             author=info.author,
             version=info.version,
-            builtin=info.builtin,
             active=info.name == active,
             has_preview=has_preview,
         ))

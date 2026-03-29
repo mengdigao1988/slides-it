@@ -200,11 +200,6 @@ export default function TemplatesModal({
                         active
                       </span>
                     )}
-                    {tpl.builtin && (
-                      <span className="text-[9px]" style={{ color: 'var(--text-muted)' }} title="Built-in template">
-                        ⊕
-                      </span>
-                    )}
                   </div>
                   <p className="text-[11px] leading-snug truncate" style={{ color: 'var(--text-muted)' }}>
                     {tpl.description || 'No description'}
@@ -326,9 +321,8 @@ export default function TemplatesModal({
                       Currently active
                     </span>
                   )}
-                  {!selectedTpl.builtin && (
-                    <button
-                      onClick={() => handleRemove(selectedTpl.name)}
+                  <button
+                    onClick={() => handleRemove(selectedTpl.name)}
                       className="px-2.5 py-1.5 rounded-lg text-xs transition-colors"
                       style={{ color: 'var(--text-muted)', border: '1px solid var(--border)' }}
                       onMouseEnter={e => {
@@ -343,7 +337,6 @@ export default function TemplatesModal({
                     >
                       Remove
                     </button>
-                  )}
                 </div>
               </div>
 

@@ -16,8 +16,9 @@ CONFIG_DIR = pathlib.Path.home() / ".config" / "slides-it"
 TEMPLATES_DIR = CONFIG_DIR / "templates"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
-# Built-in templates bundled with the package
-_BUILTIN_DIR = pathlib.Path(__file__).parent / "templates"
+# Built-in templates shipped with the package — used only as seed source.
+# At runtime all templates live in TEMPLATES_DIR (~/.config/slides-it/templates/).
+_SEED_DIR = pathlib.Path(__file__).parent / "templates"
 
 DEFAULT_TEMPLATE = "default"
 
@@ -32,7 +33,6 @@ class TemplateInfo:
     description: str
     author: str
     version: str
-    builtin: bool
 
 
 # ---------------------------------------------------------------------------
@@ -45,32 +45,22 @@ class TemplateManager:
     def __init__(self) -> None:
         TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self._seed_builtin_templates()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def list(self) -> list[TemplateInfo]:
-        """Return all installed templates (built-in first, then user-installed)."""
+        """Return all installed templates sorted by name."""
         results: list[TemplateInfo] = []
-        seen: set[str] = set()
-
-        # Built-in templates (bundled with package, read-only)
-        for path in sorted(_BUILTIN_DIR.iterdir()):
-            if path.is_dir() and (path / "TEMPLATE.md").exists():
-                info = self._parse_template_md(path / "TEMPLATE.md", builtin=True)
-                if info and info.name not in seen:
-                    results.append(info)
-                    seen.add(info.name)
-
-        # User-installed templates (skip if name already covered by built-in)
+        if not TEMPLATES_DIR.exists():
+            return results
         for path in sorted(TEMPLATES_DIR.iterdir()):
             if path.is_dir() and (path / "TEMPLATE.md").exists():
-                info = self._parse_template_md(path / "TEMPLATE.md", builtin=False)
-                if info and info.name not in seen:
+                info = self._parse_template_md(path / "TEMPLATE.md")
+                if info:
                     results.append(info)
-                    seen.add(info.name)
-
         return results
 
     def install(self, source: str, name: str | None = None) -> str:
@@ -97,13 +87,11 @@ class TemplateManager:
 
     def remove(self, name: str) -> None:
         """
-        Remove a user-installed template.
+        Remove an installed template.
 
         Raises:
-            ValueError: If template is built-in or not installed.
+            ValueError: If template is not installed.
         """
-        if (_BUILTIN_DIR / name).exists():
-            raise ValueError(f"Cannot remove built-in template '{name}'")
         target = TEMPLATES_DIR / name
         if not target.exists():
             raise ValueError(f"Template '{name}' is not installed")
@@ -196,7 +184,10 @@ class TemplateManager:
 
     def build_prompt(self, template_name: str | None = None) -> str:
         """
-        Concatenate core SKILL.md + template SKILL.md into a combined system prompt.
+        Concatenate core SKILL.md + template context into a combined system prompt.
+
+        Injects the active template name and path so the agent can reference
+        preview.html and SKILL.md directly from ~/.config/slides-it/templates/.
 
         Args:
             template_name: Template to use. Defaults to the active template.
@@ -205,24 +196,52 @@ class TemplateManager:
             Full system prompt string ready to pass as the `system` field in
             POST /session/:id/prompt_async.
         """
+        name = template_name or self.active()
         core_skill = (
             pathlib.Path(__file__).parent / "skill" / "SKILL.md"
         ).read_text(encoding="utf-8")
-        template_skill = self.get_skill_md(template_name)
-        return f"{core_skill}\n\n---\n\n{template_skill}"
+        template_skill = self.get_skill_md(name)
+        template_dir = TEMPLATES_DIR / name
+        has_preview = (template_dir / "preview.html").exists()
+        if has_preview:
+            preview_line = f"<!--   - preview.html — canonical visual reference (read this before generating slides) -->"
+        else:
+            preview_line = f"<!--   - (no preview.html for this template) -->"
+        template_header = (
+            f"<!-- Active template: {name} -->\n"
+            f"<!-- Template files: {template_dir}/ -->\n"
+            f"<!--   - SKILL.md — style instructions (injected below) -->\n"
+            f"{preview_line}\n\n"
+        )
+        return f"{template_header}{core_skill}\n\n---\n\n{template_skill}"
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _seed_builtin_templates(self) -> None:
+        """
+        Copy built-in templates from the package seed directory to TEMPLATES_DIR.
+
+        Always overwrites to ensure bundled templates stay up to date with
+        the installed package version. User-created templates (not present in
+        the seed directory) are never touched.
+        """
+        if not _SEED_DIR.exists():
+            return
+        for src in sorted(_SEED_DIR.iterdir()):
+            if not src.is_dir() or not (src / "TEMPLATE.md").exists():
+                continue
+            dst = TEMPLATES_DIR / src.name
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+
     def _template_path(self, name: str) -> pathlib.Path | None:
         """Return the directory for a template, or None if not found."""
-        builtin = _BUILTIN_DIR / name
-        if builtin.exists() and (builtin / "TEMPLATE.md").exists():
-            return builtin
-        user = TEMPLATES_DIR / name
-        if user.exists() and (user / "TEMPLATE.md").exists():
-            return user
+        path = TEMPLATES_DIR / name
+        if path.exists() and (path / "TEMPLATE.md").exists():
+            return path
         return None
 
     def _install_from_url(self, url: str, name: str | None) -> str:
@@ -252,7 +271,7 @@ class TemplateManager:
         if not (path / "SKILL.md").exists():
             raise ValueError(f"No SKILL.md found in {path}")
 
-        info = self._parse_template_md(path / "TEMPLATE.md", builtin=False)
+        info = self._parse_template_md(path / "TEMPLATE.md")
         template_name = name or (info.name if info else path.name)
         target = TEMPLATES_DIR / template_name
         if target.exists():
@@ -287,7 +306,7 @@ class TemplateManager:
         return self._install_from_path(template_root, name)
 
     @staticmethod
-    def _parse_template_md(path: pathlib.Path, builtin: bool) -> TemplateInfo | None:
+    def _parse_template_md(path: pathlib.Path) -> TemplateInfo | None:
         """Parse YAML frontmatter from TEMPLATE.md and return TemplateInfo."""
         try:
             text = path.read_text(encoding="utf-8")
@@ -309,7 +328,6 @@ class TemplateManager:
             description=fields.get("description", ""),
             author=fields.get("author", "unknown"),
             version=fields.get("version", "0.0.0"),
-            builtin=builtin,
         )
 
     def _load_config(self) -> dict[str, str]:
