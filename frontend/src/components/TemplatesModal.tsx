@@ -61,7 +61,7 @@ export default function TemplatesModal({
       .then((r) => setPreviewHtml(r.html))
       .catch(() => setPreviewHtml(''))
       .finally(() => setPreviewLoading(false))
-  }, [selected, open]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selected, open, templates]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close on Escape
   useEffect(() => {

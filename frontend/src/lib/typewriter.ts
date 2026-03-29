@@ -2,7 +2,8 @@
 // SSE delta chars are buffered here and consumed at MS_PER_CHAR rate
 // to produce a smooth typing animation independent of network speed.
 
-export const MS_PER_CHAR = Math.round(1000 / 30) // ~30 chars/sec
+export const MS_PER_CHAR = Math.round(1000 / 30) // ~30 fps
+export const CHARS_PER_TICK = 8                   // consume 8 chars/tick → ~240 chars/sec
 
 export type PendingMap = Map<string, string> // bubbleId → pending chars
 

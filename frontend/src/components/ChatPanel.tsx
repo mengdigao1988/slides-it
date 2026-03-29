@@ -25,6 +25,7 @@ import {
   enqueueDelta,
   flushAll,
   MS_PER_CHAR,
+  CHARS_PER_TICK,
   type ChatMessage,
   type PendingMap,
   type ToolEntry,
@@ -195,8 +196,8 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
       prev.map((m) => {
         const chars = pending.get(m.id)
         if (!chars) return m
-        const take = chars[0]
-        const rest = chars.slice(1)
+        const take = chars.slice(0, CHARS_PER_TICK)
+        const rest = chars.slice(CHARS_PER_TICK)
         if (rest.length > 0) pending.set(m.id, rest)
         else pending.delete(m.id)
         return { ...m, text: m.text + take }
@@ -461,10 +462,14 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
     // ── AskUserQuestion ────────────────────────────────────────────────────
     if (type === 'question.asked') {
       const req = properties as unknown as QuestionRequest
-      // Attach the question to the most recent assistant bubble
+      // Use tool.messageID from the SSE payload to pinpoint the exact bubble.
+      // Fallback to heuristic (last assistant bubble) if messageID is absent.
+      const toolMessageID = (properties as { tool?: { messageID?: string } }).tool?.messageID
       setMessages((prev) => {
-        const lastAssistant = [...prev].reverse().find((m) => m.role === 'assistant')
-        if (!lastAssistant) {
+        const target = toolMessageID
+          ? prev.find((m) => m.id === `a-${toolMessageID}`)
+          : [...prev].reverse().find((m) => m.role === 'assistant')
+        if (!target) {
           // No bubble yet — create one
           const bid = `a-q-${req.id}`
           questionBubbleRef.current.set(req.id, bid)
@@ -473,9 +478,9 @@ export default function ChatPanel({ workspacePath, activeSkill, activeTemplate, 
             error: null, timestamp: new Date(), tools: [], question: req,
           }]
         }
-        questionBubbleRef.current.set(req.id, lastAssistant.id)
+        questionBubbleRef.current.set(req.id, target.id)
         return prev.map((m) =>
-          m.id === lastAssistant.id ? { ...m, question: req } : m
+          m.id === target.id ? { ...m, question: req } : m
         )
       })
     }
@@ -1238,14 +1243,6 @@ function MessageBubble({
         <ThinkingDots toolName={runningTool} />
       ) : msg.streaming && msg.text === '' ? (
         null
-      ) : msg.streaming ? (
-        <p className="text-sm whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text-primary)' }}>
-          {msg.text}
-          <span
-            className="inline-block w-0.5 h-4 ml-0.5 animate-pulse align-middle"
-            style={{ background: 'var(--text-muted)' }}
-          />
-        </p>
       ) : isUser ? (
         <p className="text-sm whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text-primary)' }}>
           {msg.text}
@@ -1256,7 +1253,7 @@ function MessageBubble({
             {msg.text}
           </p>
         }>
-          <MarkdownRenderer content={msg.text} className="chat-markdown text-sm" />
+          <MarkdownRenderer content={msg.text} className="chat-markdown text-sm" streaming={msg.streaming} />
         </Suspense>
       )}
     </div>
