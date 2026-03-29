@@ -127,20 +127,44 @@ chmod +x "$DEST"
 ok "Installed: $DEST"
 
 # ---------------------------------------------------------------------------
-# 7. PATH check
+# 7. PATH check — auto-write shell profile if needed
 # ---------------------------------------------------------------------------
 
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
-    warn "$INSTALL_DIR is not on your PATH."
+    # Detect shell profile
+    SHELL_NAME="$(basename "${SHELL:-bash}")"
+    if [ "$SHELL_NAME" = "zsh" ]; then
+        PROFILE="${HOME}/.zshrc"
+    elif [ "$SHELL_NAME" = "bash" ]; then
+        if [ -f "${HOME}/.bash_profile" ]; then
+            PROFILE="${HOME}/.bash_profile"
+        else
+            PROFILE="${HOME}/.bashrc"
+        fi
+    else
+        PROFILE="${HOME}/.profile"
+    fi
+
+    LINE='export PATH="$HOME/.local/bin:$PATH"'
+
+    # Write only if not already present (idempotent)
+    if ! grep -qF "$LINE" "$PROFILE" 2>/dev/null; then
+        printf '\n# Added by slides-it installer\n%s\n' "$LINE" >> "$PROFILE"
+        ok "Added ~/.local/bin to PATH in $PROFILE"
+    else
+        ok "~/.local/bin already in $PROFILE"
+    fi
+
+    # Make it available for the rest of this script
+    export PATH="${INSTALL_DIR}:${PATH}"
+
     echo ""
-    echo "  Add it by appending one of these to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
+    warn "Open a new terminal, or run:"
     echo ""
-    echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-    echo ""
-    echo "  Then restart your shell or run:  source ~/.zshrc  (or ~/.bashrc)"
+    echo "    source $PROFILE"
     echo ""
 else
-    ok "$INSTALL_DIR is on your PATH"
+    ok "~/.local/bin is already on your PATH"
 fi
 
 # ---------------------------------------------------------------------------
