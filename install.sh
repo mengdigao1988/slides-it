@@ -126,45 +126,54 @@ chmod +x "$DEST"
 
 ok "Installed: $DEST"
 
-# ---------------------------------------------------------------------------
-# 7. PATH check — auto-write shell profile if needed
-# ---------------------------------------------------------------------------
+# Symlink to /usr/local/bin for universal PATH availability
+# (works across all shells and terminal emulators without sourcing any profile)
+if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+    ln -sf "$DEST" /usr/local/bin/slides-it
+    ok "Symlinked to /usr/local/bin/slides-it"
+fi
 
-if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
-    # Detect shell profile
-    SHELL_NAME="$(basename "${SHELL:-bash}")"
-    if [ "$SHELL_NAME" = "zsh" ]; then
-        PROFILE="${HOME}/.zshrc"
-    elif [ "$SHELL_NAME" = "bash" ]; then
-        if [ -f "${HOME}/.bash_profile" ]; then
-            PROFILE="${HOME}/.bash_profile"
-        else
-            PROFILE="${HOME}/.bashrc"
-        fi
-    else
-        PROFILE="${HOME}/.profile"
+# Symlink opencode too if it's in ~/.local/bin
+if [ -f "${HOME}/.local/bin/opencode" ]; then
+    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+        ln -sf "${HOME}/.local/bin/opencode" /usr/local/bin/opencode
+        ok "Symlinked opencode to /usr/local/bin/opencode"
     fi
+fi
 
-    LINE='export PATH="$HOME/.local/bin:$PATH"'
+# ---------------------------------------------------------------------------
+# 7. PATH check — write shell profile as fallback
+# ---------------------------------------------------------------------------
 
-    # Write only if not already present (idempotent)
-    if ! grep -qF "$LINE" "$PROFILE" 2>/dev/null; then
-        printf '\n# Added by slides-it installer\n%s\n' "$LINE" >> "$PROFILE"
-        ok "Added ~/.local/bin to PATH in $PROFILE"
+# Detect shell profile
+SHELL_NAME="$(basename "${SHELL:-bash}")"
+if [ "$SHELL_NAME" = "zsh" ]; then
+    PROFILE="${HOME}/.zshrc"
+elif [ "$SHELL_NAME" = "bash" ]; then
+    if [ -f "${HOME}/.bash_profile" ]; then
+        PROFILE="${HOME}/.bash_profile"
     else
-        ok "~/.local/bin already in $PROFILE"
+        PROFILE="${HOME}/.bashrc"
     fi
+else
+    PROFILE="${HOME}/.profile"
+fi
 
-    # Make it available for the rest of this script
-    export PATH="${INSTALL_DIR}:${PATH}"
+LINE='export PATH="$HOME/.local/bin:$PATH"'
 
+# Check profile file contents (not current $PATH which may be polluted by sub-shells)
+if ! grep -qF '.local/bin' "$PROFILE" 2>/dev/null; then
+    printf '\n# Added by slides-it installer\n%s\n' "$LINE" >> "$PROFILE"
+    ok "Added ~/.local/bin to PATH in $PROFILE"
     echo ""
-    warn "Open a new terminal, or run:"
+    echo "  Run this to apply in the current terminal:"
     echo ""
     echo "    source $PROFILE"
     echo ""
+    echo "  (New terminals will work automatically)"
+    echo ""
 else
-    ok "~/.local/bin is already on your PATH"
+    ok "~/.local/bin already configured in $PROFILE"
 fi
 
 # ---------------------------------------------------------------------------
