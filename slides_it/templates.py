@@ -233,9 +233,8 @@ class TemplateManager:
             if not src.is_dir() or not (src / "TEMPLATE.md").exists():
                 continue
             dst = TEMPLATES_DIR / src.name
-            if dst.exists():
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+            dst.mkdir(exist_ok=True)
+            shutil.copytree(src, dst, dirs_exist_ok=True)
 
     def _template_path(self, name: str) -> pathlib.Path | None:
         """Return the directory for a template, or None if not found."""
