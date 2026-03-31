@@ -34,6 +34,7 @@ import ToolBlock from './ToolBlock'
 import QuestionBlock from './QuestionBlock'
 import AtPopover from './AtPopover'
 import DesignModal from './DesignModal'
+import ModelModal from './ModelModal'
 import TodoBubble from './TodoBubble'
 
 const MarkdownRenderer = lazy(() => import('./MarkdownRenderer'))
@@ -75,9 +76,8 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
   // Model
   const [currentModel, setCurrentModel] = useState('')
   const [models, setModels] = useState<string[]>([])
-  const [modelOpen, setModelOpen] = useState(false)
+  const [modelModalOpen, setModelModalOpen] = useState(false)
   const [modelSwitchError, setModelSwitchError] = useState('')
-  const modelDropdownRef = useRef<HTMLDivElement>(null)
 
   // Design button
   const [designModalOpen, setDesignModalOpen] = useState(false)
@@ -127,17 +127,6 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
   useEffect(() => { messagesRef.current = messages }, [messages])
 
-  // Close model dropdown on outside click
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
-        setModelOpen(false)
-      }
-    }
-    if (modelOpen) document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [modelOpen])
-
   // Close industry dropdown on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -152,7 +141,6 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
   async function handleModelSelect(modelID: string) {
     const prev = currentModel
     setCurrentModel(modelID)
-    setModelOpen(false)
     try {
       await setModel(modelID)
     } catch (e) {
@@ -983,68 +971,26 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
 
   // ── Model pill ───────────────────────────────────────────────────────────
   const modelPill = (
-    <div className="relative" ref={modelDropdownRef}>
-      <button
-        onClick={() => setModelOpen((o) => !o)}
-        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] transition-colors"
-        style={{
-          color: 'var(--text-muted)',
-          border: '1px solid var(--border)',
-          background: 'var(--bg-surface)',
-          fontFamily: 'inherit',
-        }}
-        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-        onMouseLeave={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
-      >
-        <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-            d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-        </svg>
-        <span className="truncate max-w-[180px]">
-          {currentModel ? currentModel.split('/').pop() : 'default model'}
-        </span>
-        <svg
-          className="w-2.5 h-2.5 flex-shrink-0 transition-transform"
-          style={{ transform: modelOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-
-      {modelOpen && models.length > 0 && (
-        <div
-          className="absolute bottom-full mb-1 left-0 z-50 rounded-xl py-1 overflow-y-auto"
-          style={{
-            background: 'var(--bg-surface)',
-            border: '1px solid var(--border)',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
-            minWidth: '220px',
-            maxHeight: '260px',
-          }}
-        >
-          {models.map((m) => (
-            <button
-              key={m}
-              onClick={() => handleModelSelect(m)}
-              className="w-full text-left px-3 py-1.5 text-[11px] transition-colors flex items-center gap-2"
-              style={{
-                color: m === currentModel ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontWeight: m === currentModel ? 500 : 400,
-              }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-            >
-              {m === currentModel
-                ? <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: 'var(--green-dot)' }} />
-                : <span className="w-1.5 h-1.5 flex-shrink-0" />
-              }
-              <span className="truncate">{m}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <button
+      onClick={() => setModelModalOpen(true)}
+      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] transition-colors"
+      style={{
+        color: 'var(--text-muted)',
+        border: '1px solid var(--border)',
+        background: 'var(--bg-surface)',
+        fontFamily: 'inherit',
+      }}
+      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
+    >
+      <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+          d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+      <span className="truncate max-w-[180px]">
+        {currentModel ? currentModel.split('/').pop() : 'default model'}
+      </span>
+    </button>
   )
 
   // ── Model switch error toast ─────────────────────────────────────────────
@@ -1068,7 +1014,7 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
 
       {modelErrorToast}
 
-      {/* Design modal — managed here so TitleBar doesn't need to know about it */}
+      {/* Design modal */}
       <DesignModal
         open={designModalOpen}
         activeDesign={activeDesign ?? 'default'}
@@ -1077,6 +1023,15 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
           setDesignModalOpen(false)
           if (onDesignChange) handleDesignSelect(name)
         }}
+      />
+
+      {/* Model modal */}
+      <ModelModal
+        open={modelModalOpen}
+        models={models}
+        currentModel={currentModel}
+        onClose={() => setModelModalOpen(false)}
+        onSelect={(m) => handleModelSelect(m)}
       />
 
       {messages.length === 0 ? (
