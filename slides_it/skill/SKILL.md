@@ -25,7 +25,9 @@ Before writing any HTML, ask the user these questions **in a single message**
 2. **Audience** — Who will see it? (e.g. investors, team, conference, class)
 3. **Slide count** — How many slides? (suggest 6–10 if unsure)
 4. **Language** — What language should the slides be in?
-5. **Images** — Do you have images to include? If yes, ask for file paths.
+5. **Reference materials** — Do you have any reference files to draw content from?
+   (PDF research reports, Excel data, Word documents, PowerPoint decks, images)
+   If yes, I'll scan your workspace for available documents.
 6. **Inline editing** — Do you want to be able to edit text directly in the browser?
 7. **Visual style** — What aesthetic fits your audience? (e.g. clean & minimal,
    bold & energetic, dark & technical, warm & approachable — or describe in your
@@ -67,6 +69,58 @@ curl -s http://localhost:3000/api/designs
    - **User says keep the current one** → skip the switch, proceed to Phase 2.
 
 Do not proceed to Phase 2 until the user has replied to the design question.
+
+---
+
+### Phase 1.8 — Process Reference Materials
+
+If the user mentioned reference files (PDF, Excel, Word, PPT), or if their
+request implies existing materials (e.g. "turn this report into slides",
+"based on our Q3 data"), scan the workspace for available documents.
+
+**Step 1 — Discover documents in the workspace:**
+
+```bash
+curl -s http://localhost:3000/api/documents
+```
+
+This returns a JSON array of all document and image files found in the workspace
+(PDF, Excel, Word, PPT, CSV, images). The response includes file name, path,
+type, and size.
+
+**Step 2 — Show what was found and confirm:**
+
+Tell the user which files are available. If there are many, group them by type.
+Ask which files they want you to use as source material.
+
+**Step 3 — Extract content from selected files:**
+
+```bash
+curl -s -X POST http://localhost:3000/api/documents/extract \
+  -H "Content-Type: application/json" \
+  -d '{"path": "research-report.pdf", "max_chars": 30000}'
+```
+
+For large files, check metadata first to decide how much to extract:
+
+```bash
+curl -s "http://localhost:3000/api/documents/info?path=research-report.pdf"
+```
+
+If a file has many pages, extract in stages:
+```bash
+curl -s -X POST http://localhost:3000/api/documents/extract \
+  -H "Content-Type: application/json" \
+  -d '{"path": "report.pdf", "pages": "1-10"}'
+```
+
+**Step 4 — Use extracted content as source material for slide generation.**
+
+The extracted content is returned as clean markdown text with preserved headings,
+tables, and structure. Use it to inform slide content, data points, and narrative.
+
+If the user did not mention any reference files and their request is
+self-contained, skip this phase entirely.
 
 ---
 
@@ -471,17 +525,47 @@ If only one `---` section follows, it is the visual style (no industry is active
 
 ## File Access Rules
 
-Never read, grep, or glob binary or media files. If a file path ends with any of
-the extensions listed below, skip it entirely — do not attempt to read its contents.
-The workspace `.ignore` file already excludes them from search results, but if you
-encounter such a path through other means, ignore it unless the user explicitly asks
-you to process that specific file.
+### How tools interact with files
 
-Excluded extensions:
-`.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.ico` `.tiff` `.tif` `.avif`
+The workspace `.ignore` file prevents binary formats from appearing in `grep`,
+`glob`, and `list` results (these tools use ripgrep, which honours `.ignore`).
+The `read` tool works by **direct file path** and is **not** affected by
+`.ignore` — if you have a path, you can always `read` it.
+
+### Document files — use the slides-it document API
+
+`.pdf` `.xlsx` `.xls` `.docx` `.doc` `.pptx` `.ppt` `.csv`
+
+These are binary formats whose content cannot be parsed by the `read` tool.
+Use the slides-it server API to extract their content as clean markdown
+(see **Phase 1.8** above for the full workflow):
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/documents` | GET | List all document & image files in the workspace |
+| `/api/documents/extract` | POST | Extract file content as clean markdown |
+| `/api/documents/info` | GET | Get file metadata (page count, sheet names) |
+
+Supported formats: `.pdf` `.xlsx` `.xls` `.docx` `.doc` `.pptx` `.ppt` `.csv`
+
+**NEVER** use the `read` tool on document files — it returns garbled binary data.
+
+### Image files
+
+`.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.tiff` `.tif` `.avif`
+
+When the user provides image file paths as references:
+- Use the `read` tool to view the image — it returns a visual attachment
+  that lets you see the image content (colours, layout, text in the image, etc.)
+- Then reference the image in slides via file paths (`src="path/to/image.png"`)
+- Images are also listed by `/api/documents` for discovery
+
+### Binary files — never access
+
+These are excluded from all tools and have no extraction API:
+
 `.mp4` `.mov` `.avi` `.mkv` `.webm` `.m4v` `.wmv`
 `.mp3` `.wav` `.ogg` `.flac` `.aac` `.m4a`
-`.pdf` `.docx` `.xlsx` `.pptx` `.doc` `.xls` `.ppt`
 `.zip` `.tar` `.gz` `.bz2` `.7z` `.rar` `.tgz`
 `.woff` `.woff2` `.ttf` `.otf` `.eot`
 `.db` `.sqlite` `.sqlite3` `.bin` `.exe` `.dll` `.so` `.dylib`

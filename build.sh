@@ -79,6 +79,12 @@ uv run pyinstaller \
     --hidden-import uvicorn.lifespan.on \
     --hidden-import fastapi \
     --hidden-import typer \
+    --hidden-import pdfplumber \
+    --hidden-import pdfminer \
+    --hidden-import pdfminer.high_level \
+    --hidden-import openpyxl \
+    --hidden-import docx \
+    --hidden-import pptx \
     --clean \
     --noconfirm \
     slides_it/cli.py

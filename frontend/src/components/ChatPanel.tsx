@@ -13,10 +13,7 @@ import {
   abortSession,
   replyQuestion,
   rejectQuestion,
-  fileToFilePart,
-  isAttachableAsFile,
   injectContext,
-  type FilePart,
   type Todo,
 } from '../lib/opencode-api'
 import {
@@ -119,7 +116,7 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
   // Replay — infinite context
   const replayingRef = useRef(false)
   const lastPromptRef = useRef<{
-    text: string; model?: string; mode: Mode; fileParts?: FilePart[]; system?: string
+    text: string; model?: string; mode: Mode; system?: string
   } | null>(null)
   // Index in the messages array where the current session's own messages start.
   // Messages before this index belong to parent sessions (loaded from chain).
@@ -685,7 +682,6 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
           lastPrompt.text,
           lastPrompt.model,
           lastPrompt.mode,
-          lastPrompt.fileParts,
           lastPrompt.system,
         )
       } else {
@@ -711,33 +707,15 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
     setInput('')
     resize()
 
-    // Build file parts from @ references.
-    // Only images and PDFs are sent as binary FileParts (Claude supports these natively).
-    // Text/code/html files are referenced by path in the message text — the agent
-    // reads them with its own tools. Sending them as FileParts causes
-    // "media type: text/html functionality not supported" errors from Anthropic.
-    let fileParts: FilePart[] | undefined
+    // All @ references → append file paths to message text.
+    // The AI decides how to read each file type based on SKILL.md:
+    //   - Images: AI uses `read` tool (OpenCode returns base64 vision attachment)
+    //   - Documents (PDF/Excel/Word/PPT/CSV): AI calls /api/documents/extract
+    //   - Text/code: AI uses `read` tool directly
     let textWithRefs = text
     if (atReferences.length > 0) {
-      const binaryRefs = atReferences.filter((r) => isAttachableAsFile(r.name))
-      const textRefs = atReferences.filter((r) => !isAttachableAsFile(r.name))
-
-      // Binary files → FilePart
-      if (binaryRefs.length > 0) {
-        try {
-          fileParts = await Promise.all(binaryRefs.map((r) => fileToFilePart(r.path)))
-        } catch {
-          // If file read fails, fall back to path reference
-          textRefs.push(...binaryRefs)
-        }
-      }
-
-      // Text files → append paths to message text so agent can read them
-      if (textRefs.length > 0) {
-        const pathList = textRefs.map((r) => r.path).join('\n')
-        textWithRefs = text + '\n\n' + pathList
-      }
-
+      const pathList = atReferences.map((r) => r.path).join('\n')
+      textWithRefs = text + '\n\n' + pathList
       setAtReferences([])
     }
 
@@ -763,12 +741,11 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
       text: textWithRefs,
       model: currentModel || undefined,
       mode: currentMode,
-      fileParts,
       system: activeSkill || undefined,
     }
 
     try {
-      await sendPrompt(sessionId, textWithRefs, currentModel || undefined, currentMode, fileParts, activeSkill || undefined)
+      await sendPrompt(sessionId, textWithRefs, currentModel || undefined, currentMode, activeSkill || undefined)
     } catch (e) {
       setChatError((e as Error).message)
       setSending(false)
@@ -935,7 +912,7 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
    * Handle paste events on the textarea.
    * If the clipboard contains image files (e.g. a screenshot via Cmd+V or
    * drag-and-drop from another app), upload them to the workspace and inject
-   * @filename references so the AI receives them as FileParts.
+   * @filename references so the AI receives their file paths.
    * Plain-text paste falls through to the browser default.
    */
   async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {

@@ -1,8 +1,6 @@
 // OpenCode Server API client
 // All communication with opencode serve (localhost:4096) goes through here.
 
-import { getFileBase64 } from './slides-server-api'
-
 const BASE = 'http://localhost:4096'
 
 export interface Health {
@@ -49,15 +47,6 @@ export interface PathInfo {
   cwd: string
   root: string
   home: string
-}
-
-/** A file attachment sent as base64 data URI in a prompt */
-export interface FilePart {
-  type: 'file'
-  mime: string
-  filename: string
-  /** Full data URI: "data:{mime};base64,{b64}" */
-  url: string
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -108,15 +97,9 @@ export function sendPrompt(
   text: string,
   modelID?: string,
   agent?: 'build' | 'plan',
-  fileParts?: FilePart[],
   system?: string,
 ): Promise<void> {
   const parts: object[] = [{ type: 'text', text }]
-  if (fileParts) {
-    for (const fp of fileParts) {
-      parts.push(fp)
-    }
-  }
   return request<void>(`/session/${sessionId}/prompt_async`, {
     method: 'POST',
     body: JSON.stringify({
@@ -212,61 +195,6 @@ export function getSessionDiff(sessionId: string): Promise<FileDiff[]> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-const MIME_MAP: Record<string, string> = {
-  ts: 'text/plain', tsx: 'text/plain',
-  js: 'text/plain', jsx: 'text/plain',
-  py: 'text/plain', rb: 'text/plain', go: 'text/plain',
-  rs: 'text/plain', java: 'text/plain', c: 'text/plain', cpp: 'text/plain',
-  sh: 'text/plain', bash: 'text/plain',
-  md: 'text/markdown', txt: 'text/plain',
-  json: 'application/json', yaml: 'text/plain', yml: 'text/plain',
-  toml: 'text/plain', env: 'text/plain',
-  html: 'text/html', css: 'text/css', svg: 'image/svg+xml',
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-  gif: 'image/gif', webp: 'image/webp',
-  pdf: 'application/pdf',
-}
-
-export function guessMime(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
-  return MIME_MAP[ext] ?? 'text/plain'
-}
-
-/**
- * Determine if a file should be sent as a binary FilePart (image/PDF)
- * or referenced by path in the message text.
- *
- * Claude (Anthropic) only supports file attachments for:
- *   - Images: png, jpg, jpeg, gif, webp, svg
- *   - Documents: pdf
- * All other file types (code, html, text, etc.) must be referenced by path
- * so the agent can read them with its own tools.
- */
-const BINARY_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf'])
-
-export function isAttachableAsFile(filename: string): boolean {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
-  return BINARY_EXTS.has(ext)
-}
-
-/**
- * Read a binary file (image/PDF) via the slides-it server and return a FilePart.
- * Only call this for files where isAttachableAsFile() returns true.
- *
- * Uses /api/file-base64 (reads raw bytes server-side) instead of opencode's
- * /file/content (text-only) to avoid base64 corruption of binary data.
- */
-export async function fileToFilePart(path: string): Promise<FilePart> {
-  const name = path.split('/').pop() ?? path
-  const { base64, mime } = await getFileBase64(path)
-  return {
-    type: 'file',
-    mime,
-    filename: name,
-    url: `data:${mime};base64,${base64}`,
-  }
-}
 
 /**
  * Inject context into a session without triggering an AI reply.

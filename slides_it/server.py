@@ -189,6 +189,42 @@ class InstallIndustryRequest(BaseModel):
     activate: bool = False
 
 
+class DocumentEntry(BaseModel):
+    name: str          # filename only
+    path: str          # relative path from workspace root
+    type: str          # "pdf" | "xlsx" | "xls" | "docx" | "doc" | "pptx" | "ppt" | "csv"
+    size: int          # file size in bytes
+    size_human: str    # e.g. "2.3 MB"
+
+
+class ExtractRequest(BaseModel):
+    path: str                    # relative or absolute path to the file
+    max_chars: int = 30_000      # max characters to return (server caps at 50k)
+    pages: str = ""              # page range for PDF/PPTX, e.g. "1-10" (empty = all)
+
+
+class ExtractResponse(BaseModel):
+    path: str
+    type: str
+    content: str                 # extracted markdown text
+    total_pages: int | None = None       # PDF/PPTX page count
+    extracted_pages: str | None = None   # e.g. "1-10"
+    total_sheets: int | None = None      # Excel sheet count
+    sheet_names: list[str] | None = None # Excel sheet names
+    truncated: bool = False
+    hint: str = ""               # guidance for AI on how to get more content
+
+
+class DocumentInfoResponse(BaseModel):
+    path: str
+    type: str
+    size: int
+    size_human: str
+    total_pages: int | None = None
+    total_sheets: int | None = None
+    sheet_names: list[str] | None = None
+
+
 class FileRenameRequest(BaseModel):
     path: str       # absolute path of the file/directory to rename
     new_name: str   # new filename only (not a full path), no path separators
@@ -944,6 +980,508 @@ def delete_industry(name: str) -> dict[str, str]:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"name": name, "status": "removed"}
+
+
+# ---------------------------------------------------------------------------
+# Document extraction helpers
+# ---------------------------------------------------------------------------
+
+# File extensions the document API can discover and extract.
+_DOCUMENT_EXTENSIONS: set[str] = {
+    ".pdf", ".xlsx", ".xls", ".docx", ".doc", ".pptx", ".ppt", ".csv",
+}
+
+# Image extensions — discoverable but not extractable in the same way.
+_IMAGE_EXTENSIONS: set[str] = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".avif",
+}
+
+# Absolute ceiling — even if the caller asks for more, never exceed this.
+_MAX_EXTRACT_CHARS = 50_000
+
+
+def _human_size(size_bytes: int) -> str:
+    """Return a human-readable file size string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+
+def _parse_page_range(pages_str: str, total: int) -> tuple[int, int]:
+    """Parse a page range string like '1-10' into (start, end) 0-indexed inclusive.
+
+    Returns (0, total-1) if the string is empty or invalid.
+    """
+    if not pages_str.strip():
+        return 0, total - 1
+    try:
+        parts = pages_str.strip().split("-")
+        if len(parts) == 1:
+            p = max(1, int(parts[0]))
+            return p - 1, p - 1
+        start = max(1, int(parts[0]))
+        end = min(total, int(parts[1]))
+        return start - 1, end - 1
+    except (ValueError, IndexError):
+        return 0, total - 1
+
+
+def _extract_pdf(file_path: pathlib.Path, max_chars: int, pages: str) -> ExtractResponse:
+    """Extract text and tables from a PDF file using pdfplumber."""
+    import pdfplumber
+
+    with pdfplumber.open(file_path) as pdf:
+        total_pages = len(pdf.pages)
+        start, end = _parse_page_range(pages, total_pages)
+        end = min(end, total_pages - 1)
+
+        parts: list[str] = []
+        char_count = 0
+        actual_end = start
+
+        for i in range(start, end + 1):
+            page = pdf.pages[i]
+            page_text = page.extract_text() or ""
+
+            # Also extract tables as markdown
+            tables = page.extract_tables()
+            table_md = ""
+            for table in tables:
+                if not table:
+                    continue
+                # Build markdown table
+                rows: list[str] = []
+                for ri, row in enumerate(table):
+                    cells = [str(c).strip() if c else "" for c in row]
+                    rows.append("| " + " | ".join(cells) + " |")
+                    if ri == 0:
+                        rows.append("| " + " | ".join("---" for _ in cells) + " |")
+                table_md += "\n".join(rows) + "\n\n"
+
+            section = f"## Page {i + 1}\n\n{page_text}"
+            if table_md:
+                section += f"\n\n### Tables\n\n{table_md}"
+
+            if char_count + len(section) > max_chars:
+                # Include as much of this page as fits
+                remaining = max_chars - char_count
+                if remaining > 100:
+                    parts.append(section[:remaining])
+                actual_end = i
+                break
+
+            parts.append(section)
+            char_count += len(section)
+            actual_end = i
+
+        content = "\n\n".join(parts)
+        truncated = actual_end < total_pages - 1 or char_count >= max_chars
+        extracted_range = f"{start + 1}-{actual_end + 1}"
+        hint = ""
+        if truncated and actual_end < total_pages - 1:
+            hint = f"Content truncated. Use pages=\"{actual_end + 2}-{total_pages}\" to read the rest ({total_pages - actual_end - 1} pages remaining)."
+
+        return ExtractResponse(
+            path=str(file_path),
+            type="pdf",
+            content=content,
+            total_pages=total_pages,
+            extracted_pages=extracted_range,
+            truncated=truncated,
+            hint=hint,
+        )
+
+
+def _extract_xlsx(file_path: pathlib.Path, max_chars: int) -> ExtractResponse:
+    """Extract data from an Excel file as markdown tables using openpyxl."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    sheet_names = wb.sheetnames
+    parts: list[str] = []
+    char_count = 0
+    truncated = False
+
+    for sheet_name in sheet_names:
+        ws = wb[sheet_name]
+        rows_data: list[list[str]] = []
+        for row in ws.iter_rows(values_only=True):
+            cells = [str(c) if c is not None else "" for c in row]
+            rows_data.append(cells)
+
+        if not rows_data:
+            parts.append(f"## Sheet: {sheet_name}\n\n*(empty)*")
+            continue
+
+        # Build markdown table
+        md_rows: list[str] = []
+        for ri, cells in enumerate(rows_data):
+            md_rows.append("| " + " | ".join(cells) + " |")
+            if ri == 0:
+                md_rows.append("| " + " | ".join("---" for _ in cells) + " |")
+
+        section = f"## Sheet: {sheet_name}\n\n" + "\n".join(md_rows) + "\n"
+
+        if char_count + len(section) > max_chars:
+            # Include partial sheet info
+            remaining = max_chars - char_count
+            if remaining > 200:
+                # Show header + first N rows that fit
+                parts.append(section[:remaining])
+            truncated = True
+            break
+
+        parts.append(section)
+        char_count += len(section)
+
+    wb.close()
+
+    content = "\n\n".join(parts)
+    hint = ""
+    if truncated:
+        hint = f"Content truncated at {max_chars} characters. File has {len(sheet_names)} sheet(s): {', '.join(sheet_names)}."
+
+    return ExtractResponse(
+        path=str(file_path),
+        type="xlsx",
+        content=content,
+        total_sheets=len(sheet_names),
+        sheet_names=sheet_names,
+        truncated=truncated,
+        hint=hint,
+    )
+
+
+def _extract_docx(file_path: pathlib.Path, max_chars: int) -> ExtractResponse:
+    """Extract text and tables from a Word document using python-docx."""
+    import docx
+
+    doc = docx.Document(file_path)
+    parts: list[str] = []
+    char_count = 0
+    truncated = False
+
+    for element in doc.element.body:
+        if char_count >= max_chars:
+            truncated = True
+            break
+
+        tag = element.tag.split("}")[-1]  # strip namespace
+
+        if tag == "p":
+            # Paragraph
+            from docx.oxml.ns import qn
+            style_el = element.find(qn("w:pPr"))
+            text = element.text or ""
+            # Collect all run texts
+            full_text = "".join(
+                node.text or "" for node in element.iter()
+                if node.tag.endswith("}t")
+            )
+            if not full_text.strip():
+                continue
+
+            # Detect heading level
+            heading_level = 0
+            if style_el is not None:
+                pstyle = style_el.find(qn("w:pStyle"))
+                if pstyle is not None:
+                    val = pstyle.get(qn("w:val"), "")
+                    if val.startswith("Heading"):
+                        try:
+                            heading_level = int(val.replace("Heading", "").strip())
+                        except ValueError:
+                            heading_level = 1
+
+            if heading_level > 0:
+                line = "#" * heading_level + " " + full_text
+            else:
+                line = full_text
+
+            if char_count + len(line) > max_chars:
+                remaining = max_chars - char_count
+                if remaining > 50:
+                    parts.append(line[:remaining])
+                truncated = True
+                break
+
+            parts.append(line)
+            char_count += len(line)
+
+        elif tag == "tbl":
+            # Table — use python-docx Table object
+            from docx.table import Table as DocxTable
+            tbl = DocxTable(element, doc)
+            md_rows: list[str] = []
+            for ri, row in enumerate(tbl.rows):
+                cells = [cell.text.strip() for cell in row.cells]
+                md_rows.append("| " + " | ".join(cells) + " |")
+                if ri == 0:
+                    md_rows.append("| " + " | ".join("---" for _ in cells) + " |")
+            table_md = "\n".join(md_rows)
+
+            if char_count + len(table_md) > max_chars:
+                truncated = True
+                break
+
+            parts.append(table_md)
+            char_count += len(table_md)
+
+    content = "\n\n".join(parts)
+    hint = ""
+    if truncated:
+        hint = f"Content truncated at {max_chars} characters."
+
+    return ExtractResponse(
+        path=str(file_path),
+        type="docx",
+        content=content,
+        truncated=truncated,
+        hint=hint,
+    )
+
+
+def _extract_pptx(file_path: pathlib.Path, max_chars: int, pages: str) -> ExtractResponse:
+    """Extract text from a PowerPoint file using python-pptx."""
+    from pptx import Presentation
+
+    prs = Presentation(file_path)
+    total_slides = len(prs.slides)
+    start, end = _parse_page_range(pages, total_slides)
+    end = min(end, total_slides - 1)
+
+    parts: list[str] = []
+    char_count = 0
+    actual_end = start
+
+    for i, slide in enumerate(prs.slides):
+        if i < start:
+            continue
+        if i > end:
+            break
+
+        slide_texts: list[str] = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for paragraph in shape.text_frame.paragraphs:
+                    text = paragraph.text.strip()
+                    if text:
+                        slide_texts.append(text)
+
+            # Extract tables
+            if shape.has_table:
+                tbl = shape.table
+                md_rows: list[str] = []
+                for ri, row in enumerate(tbl.rows):
+                    cells = [cell.text.strip() for cell in row.cells]
+                    md_rows.append("| " + " | ".join(cells) + " |")
+                    if ri == 0:
+                        md_rows.append("| " + " | ".join("---" for _ in cells) + " |")
+                slide_texts.append("\n".join(md_rows))
+
+        # Include slide notes if present
+        if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+            notes = slide.notes_slide.notes_text_frame.text.strip()
+            if notes:
+                slide_texts.append(f"\n*Notes: {notes}*")
+
+        section = f"## Slide {i + 1}\n\n" + "\n\n".join(slide_texts)
+
+        if char_count + len(section) > max_chars:
+            remaining = max_chars - char_count
+            if remaining > 100:
+                parts.append(section[:remaining])
+            actual_end = i
+            break
+
+        parts.append(section)
+        char_count += len(section)
+        actual_end = i
+
+    content = "\n\n".join(parts)
+    truncated = actual_end < total_slides - 1 or char_count >= max_chars
+    extracted_range = f"{start + 1}-{actual_end + 1}"
+    hint = ""
+    if truncated and actual_end < total_slides - 1:
+        hint = f"Content truncated. Use pages=\"{actual_end + 2}-{total_slides}\" to read the rest ({total_slides - actual_end - 1} slides remaining)."
+
+    return ExtractResponse(
+        path=str(file_path),
+        type="pptx",
+        content=content,
+        total_pages=total_slides,
+        extracted_pages=extracted_range,
+        truncated=truncated,
+        hint=hint,
+    )
+
+
+def _extract_csv(file_path: pathlib.Path, max_chars: int) -> ExtractResponse:
+    """Extract data from a CSV file as a markdown table."""
+    import csv
+
+    with open(file_path, newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        md_rows: list[str] = []
+        char_count = 0
+        truncated = False
+        total_rows = 0
+
+        for ri, row in enumerate(reader):
+            total_rows += 1
+            cells = [c.strip() for c in row]
+            line = "| " + " | ".join(cells) + " |"
+            if ri == 0:
+                line += "\n| " + " | ".join("---" for _ in cells) + " |"
+
+            if char_count + len(line) > max_chars:
+                truncated = True
+                break
+
+            md_rows.append(line)
+            char_count += len(line)
+
+    content = "\n".join(md_rows)
+    hint = ""
+    if truncated:
+        hint = f"Content truncated at {max_chars} characters. File has {total_rows}+ rows."
+
+    return ExtractResponse(
+        path=str(file_path),
+        type="csv",
+        content=content,
+        truncated=truncated,
+        hint=hint,
+    )
+
+
+def _resolve_document_path(path_str: str) -> pathlib.Path:
+    """Resolve a document path relative to workspace root, with validation."""
+    p = pathlib.Path(path_str)
+    if not p.is_absolute():
+        if not _workspace_dir:
+            raise HTTPException(status_code=400, detail="No workspace is open.")
+        p = pathlib.Path(_workspace_dir) / p
+    p = p.resolve()
+    if not p.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {path_str}")
+    if not p.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {path_str}")
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Document API endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/documents", response_model=list[DocumentEntry])
+def list_documents() -> list[DocumentEntry]:
+    """List all document and image files in the workspace.
+
+    Walks the workspace directory and returns files whose extension matches
+    a known document or image format. This is not affected by .ignore — it
+    uses Python pathlib directly, so the AI can discover files that ripgrep
+    would skip.
+    """
+    if not _workspace_dir:
+        raise HTTPException(status_code=400, detail="No workspace is open.")
+    root = pathlib.Path(_workspace_dir)
+    if not root.exists():
+        raise HTTPException(status_code=400, detail="Workspace directory not found.")
+
+    allowed = _DOCUMENT_EXTENSIONS | _IMAGE_EXTENSIONS
+    entries: list[DocumentEntry] = []
+
+    for fp in root.rglob("*"):
+        if not fp.is_file():
+            continue
+        # Skip hidden directories and known noise
+        parts = fp.relative_to(root).parts
+        if any(part.startswith(".") or part in _LS_IGNORE for part in parts[:-1]):
+            continue
+        ext = fp.suffix.lower()
+        if ext not in allowed:
+            continue
+        size = fp.stat().st_size
+        entries.append(DocumentEntry(
+            name=fp.name,
+            path=str(fp.relative_to(root)),
+            type=ext.lstrip("."),
+            size=size,
+            size_human=_human_size(size),
+        ))
+
+    # Sort: documents first, then images; within each group alphabetical
+    entries.sort(key=lambda e: (e.type in {et.lstrip(".") for et in _IMAGE_EXTENSIONS}, e.path))
+    return entries
+
+
+@app.post("/api/documents/extract", response_model=ExtractResponse)
+def extract_document(req: ExtractRequest) -> ExtractResponse:
+    """Extract content from a document file and return it as markdown text.
+
+    Supported formats: PDF, Excel (.xlsx/.xls), Word (.docx), PowerPoint
+    (.pptx), and CSV. The server enforces a hard character limit to protect
+    against context window overflow.
+    """
+    fp = _resolve_document_path(req.path)
+    ext = fp.suffix.lower()
+    max_chars = min(req.max_chars, _MAX_EXTRACT_CHARS)
+
+    if ext == ".pdf":
+        return _extract_pdf(fp, max_chars, req.pages)
+    elif ext in (".xlsx", ".xls"):
+        return _extract_xlsx(fp, max_chars)
+    elif ext in (".docx", ".doc"):
+        return _extract_docx(fp, max_chars)
+    elif ext in (".pptx", ".ppt"):
+        return _extract_pptx(fp, max_chars, req.pages)
+    elif ext == ".csv":
+        return _extract_csv(fp, max_chars)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ext}. Supported: .pdf, .xlsx, .xls, .docx, .doc, .pptx, .ppt, .csv",
+        )
+
+
+@app.get("/api/documents/info", response_model=DocumentInfoResponse)
+def document_info(path: str = Query(..., description="Relative or absolute path to the file")) -> DocumentInfoResponse:
+    """Return metadata about a document file without extracting its content.
+
+    Useful for the AI to check page count / sheet names before deciding how
+    much to extract.
+    """
+    fp = _resolve_document_path(path)
+    ext = fp.suffix.lower()
+    size = fp.stat().st_size
+    resp = DocumentInfoResponse(
+        path=str(fp),
+        type=ext.lstrip("."),
+        size=size,
+        size_human=_human_size(size),
+    )
+
+    if ext == ".pdf":
+        import pdfplumber
+        with pdfplumber.open(fp) as pdf:
+            resp.total_pages = len(pdf.pages)
+    elif ext in (".xlsx", ".xls"):
+        import openpyxl
+        wb = openpyxl.load_workbook(fp, read_only=True, data_only=True)
+        resp.total_sheets = len(wb.sheetnames)
+        resp.sheet_names = wb.sheetnames
+        wb.close()
+    elif ext in (".pptx", ".ppt"):
+        from pptx import Presentation
+        prs = Presentation(fp)
+        resp.total_pages = len(prs.slides)
+
+    return resp
 
 
 @app.get("/api/settings", response_model=SettingsResponse)
