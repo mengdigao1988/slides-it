@@ -22,32 +22,33 @@ export default function TitleBar({
         borderBottom: '1px solid var(--border)',
       }}
     >
-      {/* Status dot + version */}
+      {/* Brand + version + status dot */}
       <div className="flex items-center gap-2">
         <span
-          className={`w-2 h-2 rounded-full flex-shrink-0 ${agentStatus === 'checking' ? 'animate-pulse' : ''}`}
-          style={{ background: dotColor }}
-        />
+          className="select-none"
+          style={{
+            fontFamily: "'Söhne', ui-sans-serif, -apple-system, sans-serif",
+            fontSize: '0.875rem',
+            fontWeight: 600,
+            letterSpacing: '-0.01em',
+            color: 'var(--text-primary)',
+          }}
+        >
+          slides-it
+        </span>
         {agentVersion && (
           <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
             v{agentVersion}
           </span>
         )}
+        <span
+          className={`w-2 h-2 rounded-full flex-shrink-0 ${agentStatus === 'checking' ? 'animate-pulse' : ''}`}
+          style={{ background: dotColor }}
+        />
       </div>
 
-      {/* Title */}
-      <span
-        className="flex-1 text-center select-none"
-        style={{
-          fontFamily: "'Söhne', ui-sans-serif, -apple-system, sans-serif",
-          fontSize: '1rem',
-          fontWeight: 600,
-          letterSpacing: '-0.01em',
-          color: 'var(--text-primary)',
-        }}
-      >
-        slides-it
-      </span>
+      {/* Spacer */}
+      <div className="flex-1" />
 
       {/* Settings gear */}
       <button

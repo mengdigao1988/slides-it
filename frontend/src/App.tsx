@@ -73,7 +73,7 @@ export default function App() {
       .then((s) => {
         if (s.ready && s.workspace) {
           setWorkspacePath(s.workspace)
-          setAgentVersion(s.opencode_version)
+          setAgentVersion(s.version)
           fetchSkill('default', 'general').then((skill) => setActiveSkill(skill))
           setPage('chat')
         } else {

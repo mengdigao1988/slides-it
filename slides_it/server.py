@@ -24,6 +24,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from slides_it import __version__
 from slides_it.designs import DesignManager
 from slides_it.industries import IndustryManager
 
@@ -116,7 +117,7 @@ class StartRequest(BaseModel):
 class StatusResponse(BaseModel):
     ready: bool
     workspace: str
-    opencode_version: str
+    version: str
 
 
 class SettingsResponse(BaseModel):
@@ -468,7 +469,7 @@ def get_status() -> StatusResponse:
     """Check whether opencode serve is up and healthy."""
     # First check our managed process is alive (if we started one)
     if _opencode_proc and _opencode_proc.poll() is not None:
-        return StatusResponse(ready=False, workspace=_workspace_dir, opencode_version="")
+        return StatusResponse(ready=False, workspace=_workspace_dir, version=__version__)
 
     # Then actually ping opencode regardless of how it was started
     try:
@@ -479,10 +480,10 @@ def get_status() -> StatusResponse:
             return StatusResponse(
                 ready=data.get("healthy", False),
                 workspace=_workspace_dir,
-                opencode_version=data.get("version", ""),
+                version=__version__,
             )
     except Exception:
-        return StatusResponse(ready=False, workspace=_workspace_dir, opencode_version="")
+        return StatusResponse(ready=False, workspace=_workspace_dir, version=__version__)
 
 
 @app.post("/api/shutdown")

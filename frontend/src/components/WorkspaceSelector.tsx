@@ -89,7 +89,7 @@ export default function WorkspaceSelector({ onReady }: WorkspaceSelectorProps) {
             clearInterval(pollRef.current!)
             pollRef.current = null
             setStarting(false)
-            onReady(s.workspace, s.opencode_version)
+            onReady(s.workspace, s.version)
             return
           }
         } catch {}

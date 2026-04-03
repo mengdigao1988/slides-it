@@ -20,7 +20,7 @@ export interface FsEntry {
 export interface StatusResponse {
   ready: boolean
   workspace: string
-  opencode_version: string
+  version: string
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
