@@ -5,12 +5,15 @@ interface PreviewPanelProps {
 }
 
 const OPENCODE = 'http://localhost:4096'
+const SLIDES_IT = 'http://localhost:3000'
 
 export default function PreviewPanel({ htmlFile }: PreviewPanelProps) {
   const [lastFile, setLastFile] = useState<string | null>(null)
   const [iframeSrc, setIframeSrc] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(true)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const prevBlobUrl = useRef<string | null>(null)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
 
   // ── Core fetch function — shared by effect and Refresh button ────────────
   const fetchContent = useCallback(async (path: string) => {
@@ -71,6 +74,38 @@ export default function PreviewPanel({ htmlFile }: PreviewPanelProps) {
     }
   }
 
+  async function handleSave() {
+    if (!lastFile || !iframeRef.current) return
+    try {
+      // Try to call getEditedHTML() inside the iframe
+      const win = iframeRef.current.contentWindow as
+        (Window & { getEditedHTML?: () => string }) | null
+      if (!win?.getEditedHTML) {
+        // HTML doesn't have inline editing — fall back to current DOM
+        console.warn('getEditedHTML not found in iframe')
+        return
+      }
+      setSaveStatus('saving')
+      const html = win.getEditedHTML()
+      const res = await fetch(`${SLIDES_IT}/api/file/content`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: lastFile, content: html }),
+      })
+      if (res.ok) {
+        setSaveStatus('saved')
+        setTimeout(() => setSaveStatus('idle'), 2000)
+      } else {
+        setSaveStatus('error')
+        setTimeout(() => setSaveStatus('idle'), 3000)
+      }
+    } catch (e) {
+      console.error('Save failed:', e)
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    }
+  }
+
   // ── Collapsed strip ───────────────────────────────────────────────────────
   if (collapsed) {
     return (
@@ -101,6 +136,15 @@ export default function PreviewPanel({ htmlFile }: PreviewPanelProps) {
       </div>
     )
   }
+
+  // ── Save button label & style ─────────────────────────────────────────────
+  const saveLabel = saveStatus === 'saving' ? 'Saving…'
+    : saveStatus === 'saved' ? 'Saved'
+    : saveStatus === 'error' ? 'Error'
+    : 'Save'
+  const saveColor = saveStatus === 'saved' ? '#22C55E'
+    : saveStatus === 'error' ? '#EF4444'
+    : 'var(--text-muted)'
 
   // ── Expanded ──────────────────────────────────────────────────────────────
   return (
@@ -136,6 +180,17 @@ export default function PreviewPanel({ htmlFile }: PreviewPanelProps) {
 
         {lastFile && (
           <>
+            <button
+              onClick={handleSave}
+              disabled={saveStatus === 'saving'}
+              className="text-xs px-1.5 py-1 rounded transition-colors"
+              style={{ color: saveColor }}
+              onMouseEnter={e => { if (saveStatus === 'idle') e.currentTarget.style.background = 'var(--bg-hover)' }}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              title="Save inline edits back to file"
+            >
+              {saveLabel}
+            </button>
             <button
               onClick={() => fetchContent(lastFile)}
               className="text-xs px-1.5 py-1 rounded transition-colors"
@@ -179,11 +234,12 @@ export default function PreviewPanel({ htmlFile }: PreviewPanelProps) {
         </div>
       ) : (
         <iframe
+          ref={iframeRef}
           key={lastFile}
           src={iframeSrc}
           className="flex-1 w-full border-0"
           title="Slide preview"
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-same-origin"
         />
       )}
     </div>

@@ -28,8 +28,7 @@ Before writing any HTML, ask the user these questions **in a single message**
 5. **Reference materials** — Do you have any reference files to draw content from?
    (PDF research reports, Excel data, Word documents, PowerPoint decks, images)
    If yes, I'll scan your workspace for available documents.
-6. **Inline editing** — Do you want to be able to edit text directly in the browser?
-7. **Visual style** — What aesthetic fits your audience? (e.g. clean & minimal,
+6. **Visual style** — What aesthetic fits your audience? (e.g. clean & minimal,
    bold & energetic, dark & technical, warm & approachable — or describe in your
    own words)
 
@@ -347,9 +346,89 @@ All methods must be **fully implemented** — no empty stubs, no `// TODO` comme
 
 ### Inline Editing
 
-Only add if user said **Yes** in Phase 1. Implementation: JS-based hover with
-400ms delay timeout. **Never** use CSS `~` sibling selector (breaks due to
-`pointer-events: none` interrupting the hover chain).
+**Always include inline editing** in every generated presentation. This enables
+users to click any text element and edit it directly in the browser, then save
+changes back via the slides-it app.
+
+Implementation rules:
+
+- **JS-based hover activation** — attach `mouseenter` / `mouseleave` listeners
+  on editable elements. After a 400ms hover delay, show a subtle outline to
+  indicate editability. Click activates `contenteditable`. Click outside or
+  press Escape to deactivate.
+- **Never** use CSS `~` sibling selector (breaks due to `pointer-events: none`
+  interrupting the hover chain).
+- **Editable elements** — only text content: `h1, h2, h3, h4, p, span, li,
+  blockquote, cite` and design-specific text classes (`.card-title`, `.card-body`,
+  `.stat-number`, `.stat-label`, `.stat-desc`, `.step-title`, `.step-desc`).
+  Never make structural containers or images editable.
+- **Hover style** — `outline: 1px dashed rgba(128,128,128,0.3)` on hover,
+  `outline: 2px solid rgba(59,130,246,0.5)` when actively editing. Keep it
+  subtle — must not interfere with the design aesthetic.
+- **`window.getEditedHTML()`** — always define this global function. It returns
+  the full edited HTML (`'<!DOCTYPE html>\n' + document.documentElement.outerHTML`).
+  The slides-it app calls this from the parent frame to save edits back to disk.
+
+Reference implementation (include in the `<script>` block after `SlidePresentation`):
+
+```javascript
+// --- Inline Editing ---
+(function() {
+    const EDITABLE = 'h1,h2,h3,h4,p,span,li,blockquote,cite,' +
+        '.card-title,.card-body,.stat-number,.stat-label,.stat-desc,' +
+        '.step-title,.step-desc';
+    let hoverTimer = null;
+    let activeEl = null;
+
+    document.querySelectorAll(EDITABLE).forEach(el => {
+        el.addEventListener('mouseenter', () => {
+            hoverTimer = setTimeout(() => {
+                el.style.outline = '1px dashed rgba(128,128,128,0.3)';
+                el.style.cursor = 'text';
+            }, 400);
+        });
+        el.addEventListener('mouseleave', () => {
+            clearTimeout(hoverTimer);
+            if (el !== activeEl) {
+                el.style.outline = '';
+                el.style.cursor = '';
+            }
+        });
+        el.addEventListener('click', (e) => {
+            if (activeEl && activeEl !== el) {
+                activeEl.contentEditable = 'false';
+                activeEl.style.outline = '';
+                activeEl.style.cursor = '';
+            }
+            el.contentEditable = 'true';
+            el.style.outline = '2px solid rgba(59,130,246,0.5)';
+            el.style.cursor = 'text';
+            activeEl = el;
+            e.stopPropagation();
+        });
+    });
+
+    document.addEventListener('click', () => {
+        if (activeEl) {
+            activeEl.contentEditable = 'false';
+            activeEl.style.outline = '';
+            activeEl.style.cursor = '';
+            activeEl = null;
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && activeEl) {
+            activeEl.contentEditable = 'false';
+            activeEl.style.outline = '';
+            activeEl.style.cursor = '';
+            activeEl = null;
+        }
+    });
+
+    window.getEditedHTML = () =>
+        '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+})();
+```
 
 ### Image Rules
 

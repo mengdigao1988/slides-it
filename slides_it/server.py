@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import mimetypes
@@ -248,6 +249,15 @@ class FileCreateRequest(BaseModel):
 
 class DirCreateRequest(BaseModel):
     name: str       # directory name only (no path separators), created in workspace root
+
+
+class FileContentRequest(BaseModel):
+    path: str       # absolute path of the file to write
+    content: str    # full file content (text)
+
+
+class BundleRequest(BaseModel):
+    path: str       # absolute path of the HTML file to bundle
 
 
 class ReplayRequest(BaseModel):
@@ -1686,6 +1696,116 @@ def serve_file(path: str = Query(...)) -> Response:
 
     data = file_path.read_bytes()
     return Response(content=data, media_type=mime)
+
+
+@app.put("/api/file/content")
+def update_file_content(req: FileContentRequest) -> dict[str, str]:
+    """
+    Write text content to a workspace file.
+
+    Used by the PreviewPanel Save button to persist inline edits made in
+    the browser back to the original HTML file on disk.
+
+    Security: path must be absolute and inside the active workspace.
+    """
+    if not _workspace_dir:
+        raise HTTPException(status_code=400, detail="No active workspace")
+
+    file_path = pathlib.Path(req.path).resolve()
+    workspace = pathlib.Path(_workspace_dir).resolve()
+
+    try:
+        file_path.relative_to(workspace)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path is outside the workspace")
+
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {req.path}")
+
+    file_path.write_text(req.content, encoding="utf-8")
+    return {"path": str(file_path), "status": "saved"}
+
+
+@app.post("/api/export/bundle")
+def export_bundle(req: BundleRequest) -> dict[str, str]:
+    """
+    Bundle an HTML file with all local images inlined as base64 data URIs.
+
+    Scans the HTML for ``<img src="...">`` and CSS ``url(...)`` references
+    to local files, reads each file, and replaces the reference with an
+    inline ``data:<mime>;base64,...`` URI.  The result is a fully
+    self-contained HTML string that can be shared without losing images.
+
+    External URLs (http://, https://, data:) are left unchanged.
+
+    Returns:
+        { "content": "<bundled HTML>", "filename": "<name>-bundled.html" }
+    """
+    if not _workspace_dir:
+        raise HTTPException(status_code=400, detail="No active workspace")
+
+    file_path = pathlib.Path(req.path).resolve()
+    workspace = pathlib.Path(_workspace_dir).resolve()
+
+    try:
+        file_path.relative_to(workspace)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path is outside the workspace")
+
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {req.path}")
+
+    html = file_path.read_text(encoding="utf-8")
+    html_dir = file_path.parent
+
+    def _inline_local_ref(match: re.Match[str]) -> str:
+        """Replace a local file reference with its base64 data URI."""
+        prefix = match.group(1)   # e.g. 'src="' or "url('"
+        ref = match.group(2)      # the path/URL
+        suffix = match.group(3)   # e.g. '"' or "')"
+
+        # Skip external URLs and data URIs
+        if ref.startswith(("http://", "https://", "data:", "//", "#")):
+            return match.group(0)
+
+        # Resolve relative to the HTML file's directory
+        asset_path = (html_dir / ref).resolve()
+
+        # Security: must be inside workspace
+        try:
+            asset_path.relative_to(workspace)
+        except ValueError:
+            return match.group(0)
+
+        if not asset_path.exists() or not asset_path.is_file():
+            return match.group(0)
+
+        mime, _ = mimetypes.guess_type(str(asset_path))
+        if not mime:
+            return match.group(0)
+
+        raw = asset_path.read_bytes()
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"{prefix}data:{mime};base64,{b64}{suffix}"
+
+    # Match <img src="...">, <source src="...">, etc.
+    html = re.sub(
+        r'''(src\s*=\s*["'])([^"']+)(["'])''',
+        _inline_local_ref,
+        html,
+    )
+
+    # Match CSS url("...") / url('...') / url(...)
+    html = re.sub(
+        r'''(url\(\s*["']?)([^"')]+)(["']?\s*\))''',
+        _inline_local_ref,
+        html,
+    )
+
+    stem = file_path.stem
+    filename = f"{stem}-bundled.html"
+
+    return {"content": html, "filename": filename}
 
 
 @app.put("/api/file/rename")

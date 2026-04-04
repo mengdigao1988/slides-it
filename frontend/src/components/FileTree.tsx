@@ -7,6 +7,7 @@ import {
   createFile,
   createFolder,
   getFileServeUrl,
+  bundleHtml,
   type FsEntry,
 } from '../lib/slides-server-api'
 
@@ -70,15 +71,18 @@ interface ContextMenuProps {
   menu: ContextMenuState
   onClose: () => void
   onOpen: (node: FsEntry) => void
+  onPreview: (node: FsEntry) => void
+  onBundle: (node: FsEntry) => void
   onCopyPath: (node: FsEntry) => void
   onCopyName: (node: FsEntry) => void
   onRename: (node: FsEntry) => void
   onDelete: (node: FsEntry) => void
 }
 
-function ContextMenu({ menu, onClose, onOpen, onCopyPath, onCopyName, onRename, onDelete }: ContextMenuProps) {
+function ContextMenu({ menu, onClose, onOpen, onPreview, onBundle, onCopyPath, onCopyName, onRename, onDelete }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
   const isFile = menu.node.type === 'file'
+  const isHtml = isFile && menu.node.name.toLowerCase().endsWith('.html')
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -160,6 +164,33 @@ function ContextMenu({ menu, onClose, onOpen, onCopyPath, onCopyName, onRename, 
           }
         />
       )}
+      {isFile && isHtml && (
+        <>
+          <Item
+            onClick={() => onPreview(menu.node)}
+            label="Preview"
+            icon={
+              <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+            }
+          />
+          <Item
+            onClick={() => onBundle(menu.node)}
+            label="Bundle"
+            icon={
+              <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+              </svg>
+            }
+          />
+        </>
+      )}
+      <div style={{ height: '1px', background: 'var(--border)', margin: '4px 8px' }} />
       <Item
         onClick={() => onCopyPath(menu.node)}
         label="Copy Path"
@@ -403,6 +434,27 @@ export default function FileTree({ workspacePath, refreshToken, onFileClick }: F
 
   function handleOpen(node: FsEntry) {
     window.open(getFileServeUrl(node.path), '_blank')
+  }
+
+  function handlePreview(node: FsEntry) {
+    onFileClick?.(node.path)
+  }
+
+  async function handleBundle(node: FsEntry) {
+    try {
+      showToast('Bundling…')
+      const { content, filename } = await bundleHtml(node.path)
+      const blob = new Blob([content], { type: 'text/html' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast('Bundle downloaded')
+    } catch (e) {
+      showToast(`Bundle failed: ${(e as Error).message}`)
+    }
   }
 
   function handleCopyPath(node: FsEntry) {
@@ -662,6 +714,8 @@ export default function FileTree({ workspacePath, refreshToken, onFileClick }: F
           menu={contextMenu}
           onClose={() => setContextMenu(null)}
           onOpen={handleOpen}
+          onPreview={handlePreview}
+          onBundle={handleBundle}
           onCopyPath={handleCopyPath}
           onCopyName={handleCopyName}
           onRename={(node) => { handleStartRename(node) }}

@@ -378,6 +378,14 @@ export function createFolder(name: string): Promise<{ path: string; status: stri
   })
 }
 
+/** Bundle an HTML file — inline all local images as base64 data URIs. */
+export function bundleHtml(path: string): Promise<{ content: string; filename: string }> {
+  return request<{ content: string; filename: string }>('/api/export/bundle', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Replay — infinite context
 // ---------------------------------------------------------------------------
