@@ -1711,8 +1711,10 @@ def update_file_content(req: FileContentRequest) -> dict[str, str]:
     if not _workspace_dir:
         raise HTTPException(status_code=400, detail="No active workspace")
 
-    file_path = pathlib.Path(req.path).resolve()
     workspace = pathlib.Path(_workspace_dir).resolve()
+    # Support both absolute and relative paths (relative to workspace)
+    raw = pathlib.Path(req.path)
+    file_path = raw.resolve() if raw.is_absolute() else (workspace / raw).resolve()
 
     try:
         file_path.relative_to(workspace)
@@ -1744,8 +1746,10 @@ def export_bundle(req: BundleRequest) -> dict[str, str]:
     if not _workspace_dir:
         raise HTTPException(status_code=400, detail="No active workspace")
 
-    file_path = pathlib.Path(req.path).resolve()
     workspace = pathlib.Path(_workspace_dir).resolve()
+    # Support both absolute and relative paths (relative to workspace)
+    raw = pathlib.Path(req.path)
+    file_path = raw.resolve() if raw.is_absolute() else (workspace / raw).resolve()
 
     try:
         file_path.relative_to(workspace)
@@ -1758,17 +1762,49 @@ def export_bundle(req: BundleRequest) -> dict[str, str]:
     html = file_path.read_text(encoding="utf-8")
     html_dir = file_path.parent
 
-    def _inline_local_ref(match: re.Match[str]) -> str:
-        """Replace a local file reference with its base64 data URI."""
+    # Image extensions for quick heuristic check on external URLs
+    _IMAGE_EXTS = {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+        ".bmp", ".avif", ".tiff", ".tif", ".ico",
+    }
+
+    def _inline_ref(match: re.Match[str]) -> str:
+        """Replace a file reference (local or remote image) with a base64 data URI."""
         prefix = match.group(1)   # e.g. 'src="' or "url('"
         ref = match.group(2)      # the path/URL
         suffix = match.group(3)   # e.g. '"' or "')"
 
-        # Skip external URLs and data URIs
-        if ref.startswith(("http://", "https://", "data:", "//", "#")):
+        # Already a data URI — skip
+        if ref.startswith(("data:", "#")):
             return match.group(0)
 
-        # Resolve relative to the HTML file's directory
+        # ── External URL — download if it looks like an image ──────────
+        if ref.startswith(("http://", "https://", "//")):
+            # Quick heuristic: check URL path extension
+            from urllib.parse import urlparse
+            url_path = urlparse(ref).path.lower()
+            if not any(url_path.endswith(ext) for ext in _IMAGE_EXTS):
+                return match.group(0)  # not an image — keep original URL
+            try:
+                url = ref if not ref.startswith("//") else "https:" + ref
+                req_obj = urllib.request.Request(
+                    url, headers={"User-Agent": "slides-it/bundler"}
+                )
+                with urllib.request.urlopen(req_obj, timeout=15) as resp:
+                    ct = resp.headers.get("Content-Type", "")
+                    mime = ct.split(";")[0].strip() if ct else ""
+                    if not mime.startswith("image/"):
+                        return match.group(0)  # server says not an image
+                    raw_bytes = resp.read()
+                    # Skip very large images (> 5 MB) to keep HTML manageable
+                    if len(raw_bytes) > 5 * 1024 * 1024:
+                        return match.group(0)
+                    b64 = base64.b64encode(raw_bytes).decode("ascii")
+                    return f"{prefix}data:{mime};base64,{b64}{suffix}"
+            except Exception:
+                return match.group(0)  # download failed — keep original URL
+
+        # ── Local file path ────────────────────────────────────────────
         asset_path = (html_dir / ref).resolve()
 
         # Security: must be inside workspace
@@ -1784,21 +1820,21 @@ def export_bundle(req: BundleRequest) -> dict[str, str]:
         if not mime:
             return match.group(0)
 
-        raw = asset_path.read_bytes()
-        b64 = base64.b64encode(raw).decode("ascii")
+        raw_bytes = asset_path.read_bytes()
+        b64 = base64.b64encode(raw_bytes).decode("ascii")
         return f"{prefix}data:{mime};base64,{b64}{suffix}"
 
     # Match <img src="...">, <source src="...">, etc.
     html = re.sub(
         r'''(src\s*=\s*["'])([^"']+)(["'])''',
-        _inline_local_ref,
+        _inline_ref,
         html,
     )
 
     # Match CSS url("...") / url('...') / url(...)
     html = re.sub(
         r'''(url\(\s*["']?)([^"')]+)(["']?\s*\))''',
-        _inline_local_ref,
+        _inline_ref,
         html,
     )
 
