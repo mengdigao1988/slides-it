@@ -64,7 +64,7 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
   const [isComposing, setIsComposing] = useState(false)
 
   // Mode
-  const [currentMode, setCurrentMode] = useState<Mode>('plan')
+  const [currentMode, setCurrentMode] = useState<Mode>('build')
 
   // @ references
   const [atQuery, setAtQuery] = useState<string | null>(null)
@@ -1443,26 +1443,6 @@ function MessageBubble({
       {/* Tool blocks */}
       {msg.tools.map((t) => <ToolBlock key={t.id} tool={t} />)}
 
-      {/* Pending question (interactive) */}
-      {msg.question && (
-        <QuestionBlock
-          question={msg.question}
-          onReply={onQuestionReply}
-          onReject={onQuestionReject}
-        />
-      )}
-
-      {/* Answered question (read-only summary) */}
-      {msg.questionAnswered && (
-        <QuestionBlock
-          question={{ id: msg.questionAnswered.requestId, sessionID: '', questions: msg.questionAnswered.questions }}
-          onReply={() => {}}
-          onReject={() => {}}
-          answered
-          answeredLabels={msg.questionAnswered.answers}
-        />
-      )}
-
       {/* Body */}
       {msg.error ? (
         <p className="text-sm" style={{ color: 'var(--error)' }}>{msg.error}</p>
@@ -1482,6 +1462,26 @@ function MessageBubble({
         }>
           <MarkdownRenderer content={msg.text} className="chat-markdown text-sm" streaming={msg.streaming} />
         </Suspense>
+      )}
+
+      {/* Pending question (interactive) — after body text so it appears below the AI's message */}
+      {msg.question && (
+        <QuestionBlock
+          question={msg.question}
+          onReply={onQuestionReply}
+          onReject={onQuestionReject}
+        />
+      )}
+
+      {/* Answered question (read-only summary) */}
+      {msg.questionAnswered && (
+        <QuestionBlock
+          question={{ id: msg.questionAnswered.requestId, sessionID: '', questions: msg.questionAnswered.questions }}
+          onReply={() => {}}
+          onReject={() => {}}
+          answered
+          answeredLabels={msg.questionAnswered.answers}
+        />
       )}
     </div>
   )
