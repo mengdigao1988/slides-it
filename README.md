@@ -5,6 +5,9 @@
 <p align="center">
   <a href="https://github.com/mengdigao1988/slides-it/releases"><img src="https://img.shields.io/github/v/release/mengdigao1988/slides-it?color=green&label=version" alt="version" /></a>
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license" />
+  <img src="https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React" />
   <a href="https://opencode.ai"><img src="https://img.shields.io/badge/powered%20by-OpenCode-black.svg" alt="powered by OpenCode" /></a>
 </p>
 

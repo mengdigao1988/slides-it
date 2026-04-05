@@ -103,6 +103,7 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
   const [runningTool, setRunningTool] = useState('')
   // ESC-to-abort: warning state + auto-dismiss timer
   const [escWarning, setEscWarning] = useState(false)
+  const [confirmNewChat, setConfirmNewChat] = useState(false)
   const escTimerRef = useRef<number | null>(null)
   // Map question requestID → bubble ID (to attach question to the right bubble)
   const questionBubbleRef = useRef<Map<string, string>>(new Map())
@@ -811,7 +812,12 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
     await rejectQuestion(requestId).catch(() => {})
   }
 
-  async function handleNewChat() {
+  function handleNewChat() {
+    setConfirmNewChat(true)
+  }
+
+  async function doNewChat() {
+    setConfirmNewChat(false)
     flushPending()
     if (rafRef.current) { clearTimeout(rafRef.current); rafRef.current = null }
     msgMapRef.current.clear(); partMapRef.current.clear(); partTypeRef.current.clear()
@@ -1281,21 +1287,6 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
       ) : (
         // ── Chat mode ────────────────────────────────────────────────────
         <>
-          <div
-            className="px-5 py-2 flex items-center justify-end flex-shrink-0"
-            style={{ borderBottom: '1px solid var(--border)' }}
-          >
-            <button
-              onClick={handleNewChat}
-              className="text-xs transition-colors"
-              style={{ color: 'var(--text-muted)' }}
-              onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
-              onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-muted)')}
-            >
-              New Chat
-            </button>
-          </div>
-
           <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-1">
             {messages.map((msg) => (
               <MessageBubble
@@ -1323,13 +1314,66 @@ export default function ChatPanel({ workspacePath, activeSkill, activeDesign, on
 
           <div className="flex-shrink-0 px-4 pb-4 pt-2">
             {inputBox}
-            <div className="mt-2 flex justify-start gap-2">
-              {industryPill}
-              {designButton}
-              {modelPill}
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <div className="flex gap-2">
+                {industryPill}
+                {designButton}
+                {modelPill}
+              </div>
+              {messages.length > 0 && (
+                <button
+                  onClick={handleNewChat}
+                  className="text-xs px-3 py-1 rounded-full font-medium transition-opacity hover:opacity-80"
+                  style={{ background: '#22c55e', color: '#fff' }}
+                >
+                  New Chat
+                </button>
+              )}
             </div>
           </div>
         </>
+      )}
+
+      {/* ── New Chat confirmation dialog ──────────────────────────────── */}
+      {confirmNewChat && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: 'rgba(0,0,0,0.3)' }}
+          onClick={() => setConfirmNewChat(false)}
+        >
+          <div
+            className="rounded-xl p-6 w-80 shadow-xl flex flex-col gap-4"
+            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Start a new chat?
+            </p>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              This will clear the current conversation. This action cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setConfirmNewChat(false)}
+                className="text-xs px-3 py-1.5 rounded-lg transition-colors"
+                style={{
+                  background: 'var(--bg-app)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={doNewChat}
+                className="text-xs px-3 py-1.5 rounded-lg font-medium transition-opacity hover:opacity-80"
+                style={{ background: '#22c55e', color: '#fff' }}
+              >
+                New Chat
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
