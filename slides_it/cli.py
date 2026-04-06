@@ -104,10 +104,18 @@ def _is_process_alive(pid: int) -> bool:
         return False
 
 
+def _is_port_listening(port: int) -> bool:
+    """Check whether something is listening on the given port."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def _existing_server_pid() -> int | None:
     """Return the PID of a running slides-it server, or None."""
     pid = _read_pid_file()
-    if pid and _is_process_alive(pid):
+    if pid and _is_process_alive(pid) and _is_port_listening(_SERVER_PORT):
         return pid
     # Stale pid file — clean up
     if pid:
@@ -223,8 +231,12 @@ def _launch(
         log_handle = open(_LOG_FILE, "a")  # noqa: SIM115
 
         # Build the command to re-invoke ourselves with --fg
-        executable = sys.argv[0]
-        cmd = [executable, "--fg"]
+        if getattr(sys, "frozen", False):
+            # PyInstaller binary — sys.executable IS the binary itself
+            cmd = [sys.executable, "--fg"]
+        else:
+            # Source/uv run — use same Python interpreter via module mode
+            cmd = [sys.executable, "-m", "slides_it.cli", "--fg"]
 
         proc = subprocess.Popen(
             cmd,
