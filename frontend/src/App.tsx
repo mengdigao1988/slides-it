@@ -106,12 +106,8 @@ export default function App() {
     return skill
   }
 
-  async function handleSwitchWorkspace() {
-    try {
-      await switchWorkspace()
-    } catch {
-      // If API fails, still transition — server may already be stopped
-    }
+  function handleSwitchWorkspace() {
+    // Jump to workspace selector immediately — no waiting for API
     setWorkspacePath('')
     setActiveDesign('default')
     setActiveIndustry('general')
@@ -119,6 +115,8 @@ export default function App() {
     setFileTreeRefreshToken(0)
     setModelRefreshToken(0)
     setPage('workspace')
+    // Stop opencode in background — POST /api/start will restart it anyway
+    switchWorkspace().catch(() => {})
   }
 
   if (page === 'loading') {
