@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import shutil
 import signal
@@ -19,6 +20,11 @@ from slides_it.designs import DesignManager
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_CONFIG_DIR = pathlib.Path.home() / ".config" / "slides-it"
+_PID_FILE = _CONFIG_DIR / "server.pid"
+_LOG_FILE = _CONFIG_DIR / "server.log"
+
 
 def _resource_path(relative: str) -> pathlib.Path:
     """
@@ -63,7 +69,50 @@ def _free_port(port: int) -> None:
 
 def _cleanup() -> None:
     """Clean up on exit (opencode process is handled by server lifespan)."""
-    pass
+    _remove_pid_file()
+
+
+def _write_pid_file(pid: int) -> None:
+    """Write the given PID to the pid file."""
+    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _PID_FILE.write_text(str(pid))
+
+
+def _remove_pid_file() -> None:
+    """Remove the pid file if it exists."""
+    try:
+        _PID_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _read_pid_file() -> int | None:
+    """Read the PID from the pid file, or None if not found."""
+    try:
+        text = _PID_FILE.read_text().strip()
+        return int(text) if text else None
+    except (OSError, ValueError):
+        return None
+
+
+def _is_process_alive(pid: int) -> bool:
+    """Check whether a process with the given PID is alive."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _existing_server_pid() -> int | None:
+    """Return the PID of a running slides-it server, or None."""
+    pid = _read_pid_file()
+    if pid and _is_process_alive(pid):
+        return pid
+    # Stale pid file — clean up
+    if pid:
+        _remove_pid_file()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +125,9 @@ app = typer.Typer(
         "AI-powered HTML presentation generator.\n\n"
         "Run without arguments to launch the web UI in your browser.\n"
         "Use the web UI to pick a workspace folder, then chat with the AI\n"
-        "to generate beautiful self-contained HTML slide decks."
+        "to generate beautiful self-contained HTML slide decks.\n\n"
+        "By default, slides-it runs as a background daemon.\n"
+        "Use --fg to run in the foreground (for debugging)."
     ),
     no_args_is_help=False,
     invoke_without_command=True,
@@ -130,6 +181,13 @@ def _launch(
             help="Show version and exit.",
         ),
     ] = False,
+    fg: Annotated[
+        bool,
+        typer.Option(
+            "--fg",
+            help="Run in the foreground (default: background daemon).",
+        ),
+    ] = False,
 ) -> None:
     """Launch the slides-it web UI."""
     if ctx.invoked_subcommand is not None:
@@ -140,6 +198,61 @@ def _launch(
         typer.echo("Error: opencode is not installed.", err=True)
         typer.echo("Install it with: curl -fsSL https://opencode.ai/install | bash", err=True)
         raise typer.Exit(1)
+
+    # Check if already running
+    existing_pid = _existing_server_pid()
+    if existing_pid:
+        typer.echo(
+            f"slides-it is already running (PID {existing_pid}).\n"
+            f"Opening browser… Use 'slides-it stop' to stop it."
+        )
+        webbrowser.open(f"http://localhost:{_SERVER_PORT}")
+        raise typer.Exit(0)
+
+    try:
+        ver = _pkg_version("slides-it")
+    except Exception:
+        ver = _BUNDLED_VERSION
+
+    # ── Background daemon mode (default) ───────────────────────────────────
+    if not fg:
+        # Free the port first, then fork a detached child with --fg
+        _free_port(_SERVER_PORT)
+
+        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        log_handle = open(_LOG_FILE, "a")  # noqa: SIM115
+
+        # Build the command to re-invoke ourselves with --fg
+        executable = sys.argv[0]
+        cmd = [executable, "--fg"]
+
+        proc = subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            stdout=log_handle,
+            stderr=log_handle,
+        )
+        log_handle.close()
+
+        _write_pid_file(proc.pid)
+
+        typer.echo(
+            f"slides-it v{ver} running in background (PID {proc.pid}).\n"
+            f"  → http://localhost:{_SERVER_PORT}\n"
+            f"  → Log: {_LOG_FILE}\n"
+            f"  → Use 'slides-it stop' to stop."
+        )
+
+        # Open browser after a short delay
+        threading.Thread(
+            target=lambda: (time.sleep(1.5), webbrowser.open(f"http://localhost:{_SERVER_PORT}")),
+            daemon=True,
+        ).start()
+        # Give the thread time to schedule the browser open
+        time.sleep(2.0)
+        raise typer.Exit(0)
+
+    # ── Foreground mode (--fg) ─────────────────────────────────────────────
 
     # Free the port if a previous slides-it left it occupied
     _free_port(_SERVER_PORT)
@@ -152,12 +265,10 @@ def _launch(
             err=True,
         )
 
-    try:
-        ver = _pkg_version("slides-it")
-    except Exception:
-        ver = _BUNDLED_VERSION
-
     typer.echo(f"slides-it v{ver} — http://localhost:{_SERVER_PORT}")
+
+    # Write PID file for this foreground process
+    _write_pid_file(os.getpid())
 
     # Open browser after a short delay so uvicorn is ready
     threading.Thread(
@@ -326,7 +437,7 @@ def restart() -> None:
     stop()
     time.sleep(0.5)
 
-    # Re-launch slides-it in a new process group so it outlives this process
+    # Re-launch slides-it (will run as daemon by default)
     executable = sys.argv[0]
     subprocess.Popen(
         [executable],
@@ -346,6 +457,25 @@ def stop() -> None:
     """Stop the slides-it server and opencode process."""
     stopped_any = False
 
+    # Try PID file first (preferred — clean shutdown)
+    pid = _read_pid_file()
+    if pid and _is_process_alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            # Wait briefly for graceful shutdown
+            for _ in range(10):
+                time.sleep(0.3)
+                if not _is_process_alive(pid):
+                    break
+            else:
+                # Force kill if still alive after 3 seconds
+                os.kill(pid, signal.SIGKILL)
+            typer.echo(f"Stopped slides-it server (PID {pid}).")
+            stopped_any = True
+        except (OSError, ProcessLookupError):
+            pass
+    _remove_pid_file()
+
     # Kill opencode on its port
     if sys.platform != "win32":
         try:
@@ -354,15 +484,15 @@ def stop() -> None:
                 capture_output=True, text=True,
             )
             pids = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
-            for pid in pids:
-                subprocess.run(["kill", "-9", pid], check=False)
+            for p in pids:
+                subprocess.run(["kill", "-9", p], check=False)
             if pids:
                 typer.echo(f"Stopped opencode (port 4096, killed {len(pids)} process(es)).")
                 stopped_any = True
         except FileNotFoundError:
             pass
 
-    # Kill the slides-it Python server on its port
+    # Fallback: kill any process on the server port (catches orphaned processes)
     if sys.platform != "win32":
         try:
             result = subprocess.run(
@@ -370,8 +500,8 @@ def stop() -> None:
                 capture_output=True, text=True,
             )
             pids = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
-            for pid in pids:
-                subprocess.run(["kill", "-9", pid], check=False)
+            for p in pids:
+                subprocess.run(["kill", "-9", p], check=False)
             if pids:
                 typer.echo(f"Stopped slides-it server (port {_SERVER_PORT}, killed {len(pids)} process(es)).")
                 stopped_any = True

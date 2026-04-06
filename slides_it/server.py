@@ -510,6 +510,18 @@ async def shutdown() -> dict[str, str]:
     return {"status": "shutting_down"}
 
 
+@app.post("/api/switch-workspace")
+def switch_workspace() -> dict[str, str]:
+    """
+    Stop the opencode process and reset workspace state.
+    The frontend transitions back to the workspace selector after calling this.
+    """
+    global _workspace_dir
+    _stop_opencode()
+    _workspace_dir = ""
+    return {"status": "ok"}
+
+
 @app.get("/api/session")
 def get_session() -> dict[str, object]:
     """

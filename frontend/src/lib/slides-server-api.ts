@@ -59,6 +59,10 @@ export function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>('/api/status')
 }
 
+export function switchWorkspace(): Promise<{ status: string }> {
+  return request<{ status: string }>('/api/switch-workspace', { method: 'POST' })
+}
+
 /**
  * Upload files into the active workspace.
  */

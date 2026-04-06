@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import TitleBar from './components/TitleBar'
 import ChatPanel from './components/ChatPanel'
-import PreviewPanel from './components/PreviewPanel'
 import FileTree from './components/FileTree'
 import WorkspaceSelector from './components/WorkspaceSelector'
 import SettingsModal from './components/SettingsModal'
 import ErrorBoundary from './components/ErrorBoundary'
-import { getDesignSkill, getStatus, activateIndustry as apiActivateIndustry } from './lib/slides-server-api'
+import { getDesignSkill, getStatus, activateIndustry as apiActivateIndustry, switchWorkspace } from './lib/slides-server-api'
 
 type Page = 'workspace' | 'chat' | 'loading'
 
@@ -17,7 +16,6 @@ export default function App() {
   const [activeDesign, setActiveDesign] = useState('default')
   const [activeIndustry, setActiveIndustry] = useState('general')
   const [activeSkill, setActiveSkill] = useState('')
-  const [previewFile, setPreviewFile] = useState<string | null>(null)
   const [fileTreeRefreshToken, setFileTreeRefreshToken] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [modelRefreshToken, setModelRefreshToken] = useState(0)
@@ -108,10 +106,19 @@ export default function App() {
     return skill
   }
 
-  function toRelative(absPath: string): string {
-    return absPath.startsWith(workspacePath + '/')
-      ? absPath.slice(workspacePath.length + 1)
-      : absPath
+  async function handleSwitchWorkspace() {
+    try {
+      await switchWorkspace()
+    } catch {
+      // If API fails, still transition — server may already be stopped
+    }
+    setWorkspacePath('')
+    setActiveDesign('default')
+    setActiveIndustry('general')
+    setActiveSkill('')
+    setFileTreeRefreshToken(0)
+    setModelRefreshToken(0)
+    setPage('workspace')
   }
 
   if (page === 'loading') {
@@ -159,9 +166,7 @@ export default function App() {
             <FileTree
               workspacePath={workspacePath}
               refreshToken={fileTreeRefreshToken}
-              onFileClick={(path) => {
-                if (path.endsWith('.html')) setPreviewFile(toRelative(path))
-              }}
+              onSwitchWorkspace={handleSwitchWorkspace}
             />
           </div>
           {/* Resize pill — floats inside the right edge of FileTree */}
@@ -203,13 +208,11 @@ export default function App() {
             activeIndustry={activeIndustry}
             onIndustryChange={handleIndustryChange}
             modelRefreshToken={modelRefreshToken}
-            onHtmlGenerated={(path) => {
-              setPreviewFile(toRelative(path))
+            onHtmlGenerated={() => {
               setFileTreeRefreshToken((t) => t + 1)
             }}
           />
         </div>
-        <PreviewPanel htmlFile={previewFile} />
       </div>
     </div>
     </ErrorBoundary>

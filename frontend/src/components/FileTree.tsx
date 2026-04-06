@@ -15,6 +15,7 @@ interface FileTreeProps {
   workspacePath: string
   refreshToken?: number
   onFileClick?: (path: string) => void
+  onSwitchWorkspace?: () => void
 }
 
 const colorMap: Record<string, string> = {
@@ -71,7 +72,6 @@ interface ContextMenuProps {
   menu: ContextMenuState
   onClose: () => void
   onOpen: (node: FsEntry) => void
-  onPreview: (node: FsEntry) => void
   onBundle: (node: FsEntry) => void
   onCopyPath: (node: FsEntry) => void
   onCopyName: (node: FsEntry) => void
@@ -79,7 +79,7 @@ interface ContextMenuProps {
   onDelete: (node: FsEntry) => void
 }
 
-function ContextMenu({ menu, onClose, onOpen, onPreview, onBundle, onCopyPath, onCopyName, onRename, onDelete }: ContextMenuProps) {
+function ContextMenu({ menu, onClose, onOpen, onBundle, onCopyPath, onCopyName, onRename, onDelete }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
   const isFile = menu.node.type === 'file'
   const isHtml = isFile && menu.node.name.toLowerCase().endsWith('.html')
@@ -166,18 +166,6 @@ function ContextMenu({ menu, onClose, onOpen, onPreview, onBundle, onCopyPath, o
       )}
       {isFile && isHtml && (
         <>
-          <Item
-            onClick={() => onPreview(menu.node)}
-            label="Preview"
-            icon={
-              <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-              </svg>
-            }
-          />
           <Item
             onClick={() => onBundle(menu.node)}
             label="Bundle"
@@ -303,7 +291,7 @@ function DeleteConfirm({ node, onConfirm, onCancel }: {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function FileTree({ workspacePath, refreshToken, onFileClick }: FileTreeProps) {
+export default function FileTree({ workspacePath, refreshToken, onFileClick, onSwitchWorkspace }: FileTreeProps) {
   const [roots, setRoots] = useState<TreeNodeState[]>([])
   const [error, setError] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
@@ -436,10 +424,6 @@ export default function FileTree({ workspacePath, refreshToken, onFileClick }: F
     window.open(getFileServeUrl(node.path), '_blank')
   }
 
-  function handlePreview(node: FsEntry) {
-    onFileClick?.(node.path)
-  }
-
   async function handleBundle(node: FsEntry) {
     try {
       showToast('Bundling…')
@@ -549,13 +533,31 @@ export default function FileTree({ workspacePath, refreshToken, onFileClick }: F
         className="px-3 py-2 flex items-center justify-between flex-shrink-0"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
-        <span
-          className="text-[0.625rem] font-mono truncate flex-1"
-          style={{ color: 'var(--text-muted)' }}
-          title={workspacePath}
-        >
-          {workspacePath.split('/').pop() || workspacePath}
-        </span>
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          {/* Switch Workspace */}
+          {onSwitchWorkspace && (
+            <button
+              onClick={onSwitchWorkspace}
+              className="flex items-center justify-center w-5 h-5 rounded transition-colors flex-shrink-0"
+              style={{ color: 'var(--text-muted)' }}
+              title="Switch Workspace"
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+            </button>
+          )}
+          <span
+            className="text-[0.625rem] font-mono truncate"
+            style={{ color: 'var(--text-muted)' }}
+            title={workspacePath}
+          >
+            {workspacePath.split('/').pop() || workspacePath}
+          </span>
+        </div>
         <div className="flex items-center gap-0.5 ml-2 flex-shrink-0">
           {/* Refresh */}
           <button
@@ -714,7 +716,6 @@ export default function FileTree({ workspacePath, refreshToken, onFileClick }: F
           menu={contextMenu}
           onClose={() => setContextMenu(null)}
           onOpen={handleOpen}
-          onPreview={handlePreview}
           onBundle={handleBundle}
           onCopyPath={handleCopyPath}
           onCopyName={handleCopyName}
