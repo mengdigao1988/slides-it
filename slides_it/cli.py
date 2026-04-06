@@ -243,10 +243,27 @@ def _launch(
             start_new_session=True,
             stdout=log_handle,
             stderr=log_handle,
+            env={**os.environ, "SLIDES_IT_DAEMON_CHILD": "1"},
         )
         log_handle.close()
 
         _write_pid_file(proc.pid)
+
+        typer.echo(f"slides-it v{ver} starting (PID {proc.pid})…")
+
+        # Wait for port to be ready (serial — no guessing with sleep)
+        for _ in range(30):  # max 15 seconds
+            time.sleep(0.5)
+            if proc.poll() is not None:
+                typer.echo("Error: server failed to start. Check log:", err=True)
+                typer.echo(f"  {_LOG_FILE}", err=True)
+                _remove_pid_file()
+                raise typer.Exit(1)
+            if _is_port_listening(_SERVER_PORT):
+                break
+        else:
+            typer.echo("Error: server did not start within 15s.", err=True)
+            raise typer.Exit(1)
 
         typer.echo(
             f"slides-it v{ver} running in background (PID {proc.pid}).\n"
@@ -254,14 +271,7 @@ def _launch(
             f"  → Log: {_LOG_FILE}\n"
             f"  → Use 'slides-it stop' to stop."
         )
-
-        # Open browser after a short delay
-        threading.Thread(
-            target=lambda: (time.sleep(1.5), webbrowser.open(f"http://localhost:{_SERVER_PORT}")),
-            daemon=True,
-        ).start()
-        # Give the thread time to schedule the browser open
-        time.sleep(2.0)
+        webbrowser.open(f"http://localhost:{_SERVER_PORT}")
         raise typer.Exit(0)
 
     # ── Foreground mode (--fg) ─────────────────────────────────────────────
@@ -282,11 +292,12 @@ def _launch(
     # Write PID file for this foreground process
     _write_pid_file(os.getpid())
 
-    # Open browser after a short delay so uvicorn is ready
-    threading.Thread(
-        target=lambda: (time.sleep(1.0), webbrowser.open(f"http://localhost:{_SERVER_PORT}")),
-        daemon=True,
-    ).start()
+    # Open browser only when run directly (not as daemon child)
+    if not os.environ.get("SLIDES_IT_DAEMON_CHILD"):
+        threading.Thread(
+            target=lambda: (time.sleep(1.0), webbrowser.open(f"http://localhost:{_SERVER_PORT}")),
+            daemon=True,
+        ).start()
 
     # Register SIGTERM handler so `kill <pid>` also cleans up
     def _on_sigterm(signum: int, frame: object) -> None:  # noqa: ARG001
@@ -549,6 +560,8 @@ def upgrade() -> None:
         typer.echo(f"Already up to date (slides-it {current}).")
         return
 
+    typer.echo(f"Stopping current instance before upgrade…")
+    stop()
     typer.echo(f"Upgrading slides-it {current} → {latest} ...")
     result = subprocess.run(
         "curl -fsSL https://raw.githubusercontent.com/cyber-dash-tech/slides-it/main/install.sh | bash",
